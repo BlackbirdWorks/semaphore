@@ -124,8 +124,10 @@ func (r *response) wantStrongETag(t *testing.T) {
 func (r *response) claimETag() {
 	var ids []string
 
+	suffix := " " + http.CanonicalHeaderKey("ETag")
+
 	for _, id := range r.observed {
-		if ofrepconformance.KindOf(id) == ofrepconformance.KindHeader && strings.HasSuffix(id, " "+http.CanonicalHeaderKey("ETag")) {
+		if ofrepconformance.KindOf(id) == ofrepconformance.KindHeader && strings.HasSuffix(id, suffix) {
 			ids = append(ids, id)
 		}
 	}
