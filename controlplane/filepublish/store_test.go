@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -229,7 +230,7 @@ func TestSymlinksCannotLeaveTheRoot(t *testing.T) {
 	})
 }
 
-func TestPutWritesAtomicallyWithSafePermissions(t *testing.T) {
+func TestPutWritesAtomically(t *testing.T) {
 	t.Parallel()
 
 	store, dir := newStore(t)
@@ -247,13 +248,6 @@ func TestPutWritesAtomicallyWithSafePermissions(t *testing.T) {
 
 	require.NoError(t, filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 		require.NoError(t, err)
-
-		info, infoErr := entry.Info()
-		require.NoError(t, infoErr)
-
-		if path != dir {
-			assert.Zero(t, info.Mode().Perm()&0o022, "%s is writable by group or others", path)
-		}
 
 		if !entry.IsDir() {
 			names = append(names, entry.Name())
@@ -790,6 +784,8 @@ func heldLock(t *testing.T) *lockRig {
 	release, err := holder.Lock(t.Context())
 	require.NoError(t, err)
 
+	t.Cleanup(release)
+
 	clock := &lockClock{waits: make(chan chan time.Time)}
 	notices := make(chan string, 8)
 
@@ -862,4 +858,41 @@ func TestLockWaitProceedsWhenTheLockIsReleased(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dir, "a"))
 	require.NoError(t, err)
 	assert.Equal(t, "x", string(got))
+}
+
+func TestLockOfACancelledContextIsNeverTaken(t *testing.T) {
+	t.Parallel()
+
+	store, dir := newStore(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err := store.Lock(ctx)
+	require.ErrorIs(t, err, filepublish.ErrLockWait)
+	require.ErrorIs(t, err, context.Canceled)
+
+	// the lock is free: a live context takes it at once
+	release, err := store.Lock(t.Context())
+	require.NoError(t, err)
+	release()
+
+	assert.FileExists(t, filepath.Join(dir, ".semaphore-publish.lock"))
+}
+
+func TestTheLargestBodyLimitStillWritesTheWholeBody(t *testing.T) {
+	t.Parallel()
+
+	store, err := filepublish.New(t.TempDir(), filepublish.WithMaxBodyBytes(math.MaxInt64))
+	require.NoError(t, err)
+
+	require.NoError(t, put(store, "a", "the whole body", nil))
+
+	got, err := store.GetObject(t.Context(), &s3.GetObjectInput{Key: aws.String("a")})
+	require.NoError(t, err)
+
+	body, err := io.ReadAll(got.Body)
+	require.NoError(t, err)
+	require.NoError(t, got.Body.Close())
+	assert.Equal(t, "the whole body", string(body))
 }

@@ -18,6 +18,8 @@ import (
 )
 
 const (
+	// pipeWait is how long Run waits for the output pipes after the context ended.
+	pipeWait   = 10 * time.Second
 	e2eTimeout = 5 * time.Minute
 	sentinel   = "@@docs-test-block@@"
 )
@@ -108,6 +110,8 @@ func runPage(t *testing.T, page, examplePort string, cleanup func(ctx context.Co
 
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	// a command that holds the output pipes open after the deadline cannot keep the test from its cleanup
+	cmd.WaitDelay = pipeWait
 
 	err := cmd.Run()
 	require.NoError(t, err, "stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -229,7 +230,13 @@ func (s *Store) PutObject(
 		return nil, err
 	}
 
-	body, err := io.ReadAll(io.LimitReader(input.Body, s.set.maxBody+1))
+	// one byte more than the limit tells that the body is over it; the bound is not limit+1 when that would wrap
+	bound := s.set.maxBody
+	if bound < math.MaxInt64 {
+		bound++
+	}
+
+	body, err := io.ReadAll(io.LimitReader(input.Body, bound))
 	if err != nil {
 		return nil, fmt.Errorf("put %s: read body: %w", key, err)
 	}
@@ -258,7 +265,7 @@ func (s *Store) PutObject(
 
 	defer unlock()
 
-	err = s.checkCondition(key, input)
+	err = checkCondition(root, key, input)
 	if err != nil {
 		return nil, err
 	}
@@ -280,7 +287,13 @@ func (s *Store) open(key string) (*os.File, int64, error) {
 
 	defer func() { _ = root.Close() }()
 
-	file, err := root.Open(manifestreader.FileKeyPath(key))
+	return openIn(root, key)
+}
+
+// openIn opens a key below root, without blocking, and returns the regular file with its size. The type is read from
+// the open handle, so a path swapped after the open cannot make the store read another file.
+func openIn(root *os.Root, key string) (*os.File, int64, error) {
+	file, err := root.OpenFile(manifestreader.FileKeyPath(key), manifestreader.FileOpenFlags, 0)
 	if err != nil {
 		return nil, 0, mapOpenError(key, err)
 	}
@@ -300,8 +313,9 @@ func (s *Store) open(key string) (*os.File, int64, error) {
 }
 
 // checkCondition evaluates If-None-Match and If-Match against the file as it is now.
-func (s *Store) checkCondition(key string, input *s3.PutObjectInput) error {
-	file, _, err := s.open(key)
+// It reads through the root that the caller holds the lock of, never by the path of the store.
+func checkCondition(root *os.Root, key string, input *s3.PutObjectInput) error {
+	file, _, err := openIn(root, key)
 
 	switch {
 	case err == nil:

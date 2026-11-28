@@ -182,7 +182,7 @@ func TestFileStoreTargetErrors(t *testing.T) {
 	}{
 		{
 			name: "a root that does not exist", store: func(rig *fileRig) string { return rig.store + "-missing" },
-			wantCode: helper.ExitFailure, wantText: "no such file or directory",
+			wantCode: helper.ExitFailure, wantText: "file store root:",
 		},
 		{
 			name: "a prefix that leaves the root", store: func(rig *fileRig) string { return rig.store },

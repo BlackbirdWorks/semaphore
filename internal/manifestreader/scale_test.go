@@ -25,7 +25,10 @@ func scaleObjects(n int) []obj {
 	return objs
 }
 
-// scaleWait is the failure bound of a round of the largest manifest: the cold round hashes and decodes every object.
+// scaleWait is the failure bound of a round of the largest manifest. The cold round fetches, checksums and decodes
+// 20,000 objects, and the race detector slows each of those steps several times over; on a shared CI runner the round
+// needs far longer than the 10 seconds that suit the small manifests of the other tests. It is a bound on failure
+// only: a passing round returns as soon as it ends.
 const scaleWait = 2 * time.Minute
 
 func TestReader_TwentyThousandObjects(t *testing.T) {

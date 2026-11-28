@@ -35,6 +35,13 @@ func (s *Store) acquire(ctx context.Context, root *os.Root) (func(), error) {
 	where := filepath.Join(s.root, lockName)
 
 	for {
+		ctxErr := ctx.Err()
+		if ctxErr != nil {
+			_ = file.Close()
+
+			return nil, fmt.Errorf("%w %s: %w", ErrLockWait, where, ctxErr)
+		}
+
 		held, tryErr := tryLock(file)
 		if tryErr != nil {
 			_ = file.Close()

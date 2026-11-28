@@ -121,7 +121,7 @@ the change is live within a few seconds. Nothing restarts.
 
 <!-- docs-test: run -->
 ```shell
-sed -i 's/variation: enabled/variation: disabled/' flags-repo/flags/checkout.yaml
+sed 's/variation: enabled/variation: disabled/' flags-repo/flags/checkout.yaml > checkout.tmp && mv checkout.tmp flags-repo/flags/checkout.yaml
 semaphore-cli publish ./flags-repo --config bootstrap.yaml | sed -n 1p
 for i in $(seq 30); do
   curl -s http://127.0.0.1:1041/ofrep/v1/evaluate/flags/new-checkout -X POST \

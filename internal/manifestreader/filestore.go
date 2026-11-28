@@ -230,6 +230,11 @@ func OpenFileRoot(dir string) (*os.Root, error) {
 	return root, nil
 }
 
+// FileOpenFlags are the flags with which a store opens a key to read it: read-only, and on Unix without blocking, so
+// that a FIFO that took the place of a file is refused (after the type is read from the open handle) instead of
+// waiting for a writer. The publisher opens keys with the same flags as the reader.
+const FileOpenFlags = openFlags
+
 // FileKeyPath maps a valid key (see [ValidFileKey]) to the path below the root of the store. It is the only
 // key-to-path mapping of reader and publisher.
 func FileKeyPath(key string) string { return filepath.FromSlash(key) }

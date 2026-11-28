@@ -17,5 +17,6 @@
 // through this package exclude each other, in one process and across processes of one host. The lock does not
 // protect against a writer that ignores it, and flock is not reliable on every network file system (NFS before
 // version 4 or with locks off): publish from one host to such a store. Writing needs a platform with flock
-// (Linux, macOS, the BSDs); elsewhere a write fails with [ErrUnsupported]. Reading (verify) works everywhere.
+// (Linux, macOS, the BSDs) or LockFileEx (Windows); elsewhere a write fails with [ErrUnsupported]. Reading (verify)
+// works everywhere.
 package filepublish
