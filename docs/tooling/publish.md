@@ -263,8 +263,8 @@ One rule holds for every `semaphore-cli` command:
 | Code | Meaning |
 |---|---|
 | 0 | Success (also `no change` and a dry run) |
-| 1 | Every other failure: bad usage (an unknown flag or subcommand, a bad argument count), an unreadable file, any command that defines no other code |
-| 2 | Invalid input: a document, a file that is not regular or is too large, a limit, the source layout, the bootstrap file, or a generation that does not increase |
+| 1 | Every other failure: bad usage (an unknown flag or subcommand, a bad argument count), an unreadable file, an interrupted wait for the lock of a file store, any command that defines no other code |
+| 2 | Invalid input: a document, a file that is not regular or is too large, a limit, the source layout, the bootstrap file, a generation that does not increase, a key a file store refuses, or a write to a file store on a platform without a lock |
 | 3 | Conflict: another publisher changed the manifest first. Nothing visible changed; run again |
 | 4 | A call to the store failed (network, access, throttling). Safe to repeat |
 | 5 | The bucket holds a bad state: `verify` found problems, there is no manifest to verify, or the manifest (invalid, over the limits) or an object does not match |
@@ -320,19 +320,31 @@ The upload protocol is the one above, with files for objects:
   link that a write would replace is refused too.
 - Objects first, manifest last. Every file is written aside under a unique name that starts with `.tmp-`, in the directory of
   its final name (so on the same file system), flushed with `fsync`, then renamed over the final name; the directory is
-  flushed after the rename. A reader sees the old file or the new one, never a partial file. Missing parent directories are
-  created with mode `0755`, files get `0644` (the umask can only remove bits): nothing is world-writable.
+  flushed after the rename, and so is every directory the publish creates. A reader sees the old file or the new one, never a
+  partial file. Missing parent directories are created with mode `0755`, files get `0644` (the umask can only remove
+  bits): nothing is world-writable. On Windows there is no directory flush, and the rename replaces the file; it can fail
+  with an access error while the relay has that file open, and repeating the publish is safe.
 - A killed publish leaves at most a `.tmp-*` file. The relay never lists the directory and reads only the keys of the
   manifest, so it ignores them; they are safe to delete.
-- The "manifest changed since read" protection is a lock. The conditional write (create only when there is no manifest, else
-  replace only if it still has the content that was read) runs under an exclusive advisory lock (`flock`) on
-  `.semaphore-publish.lock` in the directory. Of two concurrent publishers exactly one wins; the other fails with the conflict
-  error and exit code 3, as on S3.
+- Names the store keeps for itself, and names that are not portable, are refused in a key (exit 2), on every platform: a
+  path component that is `.semaphore-publish.lock` or starts with `.tmp-`, a Windows device name (`CON`, `PRN`, `AUX`, `NUL`,
+  `COM0` to `COM9`, `LPT0` to `LPT9`, with or without an extension), a name that ends with a dot or a space, and the characters
+  `< > : " | ? *` and control characters. The relay itself reads any clean relative key. Keys that differ only by letter
+  case name the same file on a case-insensitive file system (the default on macOS and Windows): do not rely on case.
+- "Manifest changed since read" is a lock. The conditional write (create only when there is no manifest, else replace only
+  if it still has the content that was read) runs under an exclusive lock on `.semaphore-publish.lock` in the directory
+  (`flock` on Linux, macOS and the BSDs, `LockFileEx` on Windows). Of two concurrent publishers exactly one wins; the other
+  fails with the conflict error and exit code 3, as on S3.
+- A busy lock does not hang the command: it is tried again every 50 ms. After 2 seconds the command prints `waiting for the
+  publish lock <path>` once on stderr, and it keeps waiting until the lock is free or the command is interrupted (exit 1, the
+  error says the wait for the publish lock ended). A stopped publisher that holds the lock keeps the others waiting: stop it.
+  The system drops the lock when its process ends.
 - Limits of the lock: it is advisory (a writer that does not use `semaphore-cli publish` or `s3publish` over this store is not
-  excluded), it holds on one host, and it is not reliable on network file systems that do not support `flock` (NFS before
-  version 4, or mounted without locks): publish to such a store from one host only.
-- Platforms: writing needs `flock` (Linux, macOS, the BSDs). On Windows `publish` to a file store fails with a clear
-  "not supported" error; `publish verify` and the relay read on every platform.
+  excluded), it holds on one host, and it is not reliable on network file systems that do not support these locks (NFS
+  before version 4, or mounted without locks): publish to such a store from one host only.
+- A body larger than the object limit (the manifest limit for the manifest) is refused (exit 2). On a platform that is
+  neither Linux, macOS, a BSD nor Windows, a write fails with a "not supported" error (exit 2); `publish verify` and the relay
+  read everywhere.
 - Permissions: the publisher needs read, write and create in the directory; `publish verify` needs read only.
 
 ## Not yet

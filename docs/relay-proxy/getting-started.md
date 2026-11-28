@@ -120,7 +120,7 @@ The relay runs in the background here, and writes its log to `relay.log`. It is 
 
 <!-- docs-test: run -->
 ```shell
-semaphore --config bootstrap.yaml > relay.log 2>&1 &
+semaphore --config bootstrap.yaml --listen 127.0.0.1:1031 > relay.log 2>&1 &
 echo $! > relay.pid
 until curl -sf http://127.0.0.1:1031/readyz > /dev/null; do sleep 1; done
 ```

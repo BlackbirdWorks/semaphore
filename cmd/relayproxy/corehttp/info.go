@@ -68,7 +68,7 @@ func configInfo(status *relaycore.Status, now time.Time) model.ConfigInfo {
 	info.Reader = readerInfo(&status.Source.Reader.Manifest)
 	info.LastReload = roundInfo(status.Reloads.LastRound)
 	info.LastApplied = roundInfo(status.Reloads.LastApplied)
-	info.UnknownFields = unknownFieldsInfo(status)
+	info.UnknownFields = UnknownFieldsInfo(status)
 
 	if status.Reloads.LastRejected != nil {
 		rejected := roundInfo(status.Reloads.LastRejected)
@@ -139,7 +139,8 @@ func readerInfo(manifest *manifestreader.ManifestStatus) *model.ReaderInfo {
 	return out
 }
 
-func unknownFieldsInfo(status *relaycore.Status) []model.UnknownFieldsInfo {
+// UnknownFieldsInfo summarises the unknown fields of the served documents by kind: the count and at most ten paths.
+func UnknownFieldsInfo(status *relaycore.Status) []model.UnknownFieldsInfo {
 	byKind := map[string]*model.UnknownFieldsInfo{}
 
 	manifest := status.Source.Reader.Manifest
@@ -172,16 +173,54 @@ func unknownFieldsInfo(status *relaycore.Status) []model.UnknownFieldsInfo {
 	return out
 }
 
-// collectObjectUnknownFields adds the unknown fields of the objects to byKind. The paths are "object/path": they are
-// sorted as these strings (so object "a-b" is before object "a": "-" sorts before "/"), and the limit applies to
-// that order.
+// path is the unknown field path "object/path" of an object, kept in two parts so that no string is built for it.
+type path struct{ object, field string }
+
+func (p path) String() string { return p.object + "/" + p.field }
+
+// byteAt returns the byte i of object+"/"+field and whether there is one.
+func (p path) byteAt(i int) (byte, bool) {
+	switch {
+	case i < len(p.object):
+		return p.object[i], true
+	case i == len(p.object):
+		return '/', true
+	case i-len(p.object) <= len(p.field):
+		return p.field[i-len(p.object)-1], true
+	}
+
+	return 0, false
+}
+
+// compare orders two paths as the strings they stand for.
+func (p path) compare(other path) int {
+	for i := 0; ; i++ {
+		mine, haveMine := p.byteAt(i)
+		theirs, haveTheirs := other.byteAt(i)
+
+		switch {
+		case !haveMine && !haveTheirs:
+			return 0
+		case !haveMine:
+			return -1
+		case !haveTheirs:
+			return 1
+		case mine != theirs:
+			return int(mine) - int(theirs)
+		}
+	}
+}
+
+// collectObjectUnknownFields adds the unknown fields of the objects to byKind. The paths are "object/path": the entry
+// keeps the ten smallest of them as strings, sorted (so object "a-b" is before object "a": "-" sorts before "/").
+// It never holds more than ten paths per kind and builds no string before the end, so the work and the allocations
+// do not grow with the number of objects. The result does not depend on the order of the map.
 func collectObjectUnknownFields(
 	byKind map[string]*model.UnknownFieldsInfo, objects map[string]*flagruntime.ObjectStatus,
 ) {
-	touched := map[string]struct{}{}
+	smallest := map[string][]path{}
 
-	for _, name := range slices.Sorted(maps.Keys(objects)) {
-		obj := objects[name]
+	for _, obj := range objects {
 		if obj.UnknownFields == 0 {
 			continue
 		}
@@ -190,25 +229,42 @@ func collectObjectUnknownFields(
 		if entry == nil {
 			entry = &model.UnknownFieldsInfo{Kind: obj.Kind}
 			byKind[obj.Kind] = entry
+			smallest[obj.Kind] = make([]path, 0, maxUnknownFieldPaths)
 		}
 
-		touched[obj.Kind] = struct{}{}
 		entry.Count += obj.UnknownFields
 
 		for _, field := range obj.UnknownFieldPaths {
-			entry.Fields = append(entry.Fields, obj.Name+"/"+field)
+			smallest[obj.Kind] = keepSmallest(smallest[obj.Kind], path{object: obj.Name, field: field})
 		}
 	}
 
-	for kind := range touched {
-		entry := byKind[kind]
+	for kind, paths := range smallest {
+		fields := byKind[kind].Fields
 
-		slices.Sort(entry.Fields)
-
-		if len(entry.Fields) > maxUnknownFieldPaths {
-			entry.Fields = entry.Fields[:maxUnknownFieldPaths]
+		for _, p := range paths {
+			fields = append(fields, p.String())
 		}
+
+		slices.Sort(fields)
+
+		byKind[kind].Fields = fields[:min(len(fields), maxUnknownFieldPaths)]
 	}
+}
+
+// keepSmallest inserts entry into the sorted list of at most ten paths when it is among the ten smallest.
+func keepSmallest(paths []path, entry path) []path {
+	full := len(paths) >= maxUnknownFieldPaths
+	if full && entry.compare(paths[len(paths)-1]) >= 0 {
+		return paths
+	}
+
+	pos, _ := slices.BinarySearchFunc(paths, entry, path.compare)
+	if full {
+		paths = paths[:len(paths)-1]
+	}
+
+	return slices.Insert(paths, pos, entry)
 }
 
 func stateInfo(state *manifestreader.StateStatus) model.StateInfo {

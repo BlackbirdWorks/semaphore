@@ -9,5 +9,5 @@ import (
 func TestGettingStartedFileStoreRunsAsWritten(t *testing.T) {
 	t.Parallel()
 
-	runPage(t, gettingFilePage, func(context.Context) {})
+	runPage(t, gettingFilePage, "1041", func(context.Context) {})
 }

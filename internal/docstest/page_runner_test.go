@@ -3,6 +3,7 @@ package docstest_test
 import (
 	"bytes"
 	"context"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,9 +56,10 @@ func readTrimmed(path string) string {
 }
 
 // runPage follows a page literally: every shell block of the page runs, in order, in one shell, against the binaries
-// built from this tree. The text block after a shell block is what that block prints. cleanup removes what a failed
-// run leaves behind besides the relay process.
-func runPage(t *testing.T, page string, cleanup func(ctx context.Context)) {
+// built from this tree. The port that the page shows (examplePort) is replaced by a free port of this run, so that
+// pages and shards that run together cannot collide. The text block after a shell block is what that block prints.
+// cleanup removes what a failed run leaves behind besides the relay process.
+func runPage(t *testing.T, page, examplePort string, cleanup func(ctx context.Context)) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(t.Context(), e2eTimeout)
@@ -92,6 +94,8 @@ func runPage(t *testing.T, page string, cleanup func(ctx context.Context)) {
 
 	require.NotEmpty(t, wantOutputs)
 
+	runnable := strings.ReplaceAll(script.String(), examplePort, freePort(t))
+
 	t.Cleanup(func() {
 		killRelay(work)
 		cleanup(context.WithoutCancel(ctx))
@@ -99,7 +103,7 @@ func runPage(t *testing.T, page string, cleanup func(ctx context.Context)) {
 
 	var stdout, stderr bytes.Buffer
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", script.String())
+	cmd := exec.CommandContext(ctx, "bash", "-c", runnable)
 	cmd.Dir = work
 
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -122,4 +126,20 @@ func runPage(t *testing.T, page string, cleanup func(ctx context.Context)) {
 			assert.Equal(t, want, strings.TrimSpace(got[i]))
 		})
 	}
+}
+
+// freePort returns a port that nothing listens on now.
+func freePort(t *testing.T) string {
+	t.Helper()
+
+	var lc net.ListenConfig
+
+	listener, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	require.NoError(t, err)
+	require.NoError(t, listener.Close())
+
+	return port
 }

@@ -2,17 +2,24 @@ package publish_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/blackbirdworks/semaphore/cmd/cli/helper"
 	"github.com/blackbirdworks/semaphore/cmd/cli/publish"
+	"github.com/blackbirdworks/semaphore/controlplane/filepublish"
+	"github.com/blackbirdworks/semaphore/controlplane/s3publish"
+	"github.com/blackbirdworks/semaphore/internal/connection"
 )
 
 const fileFlagsDoc = `checkout-new:
@@ -77,18 +84,27 @@ func (r *fileRig) writeFlags(t *testing.T, content string) {
 }
 
 // run executes the command and returns its output and the exit code (0 for success).
-func (*fileRig) run(t *testing.T, args ...string) (string, int) {
+func (r *fileRig) run(t *testing.T, args ...string) (string, int) {
+	t.Helper()
+
+	return r.runWith(t.Context(), t, publish.DefaultDeps(), args...)
+}
+
+// runWith is run with a context and the dependencies of the command.
+func (*fileRig) runWith(ctx context.Context, t *testing.T, deps publish.Deps, args ...string) (string, int) {
 	t.Helper()
 
 	var stdout, stderr bytes.Buffer
 
-	err := publish.Run(t.Context(), args, &helper.Streams{Stdout: &stdout, Stderr: &stderr}, publish.DefaultDeps())
+	err := publish.Run(ctx, args, &helper.Streams{Stdout: &stdout, Stderr: &stderr}, deps)
 	if err == nil {
 		return stdout.String(), 0
 	}
 
 	exit, ok := errors.AsType[*helper.ExitError](err)
-	require.True(t, ok, "%v", err)
+	if !ok {
+		return stdout.String() + stderr.String() + err.Error(), -1
+	}
 
 	return stdout.String() + stderr.String() + err.Error(), exit.Code
 }
@@ -197,4 +213,119 @@ func TestFileStoreTargetErrors(t *testing.T) {
 			assert.NoDirExists(t, filepath.Join(filepath.Dir(rig.store), "outside"))
 		})
 	}
+}
+
+// lockTimer is the timer of the lock wait of the command, driven by the test.
+type lockTimer struct{ waits chan chan time.Time }
+
+func (lt *lockTimer) after(time.Duration) <-chan time.Time {
+	tick := make(chan time.Time, 1)
+	lt.waits <- tick
+
+	return tick
+}
+
+func TestFileStorePublishWaitsForTheLockAndStopsWithTheContext(t *testing.T) {
+	t.Parallel()
+
+	rig := newFileRig(t)
+
+	holder, err := filepublish.New(rig.store)
+	require.NoError(t, err)
+
+	release, err := holder.Lock(t.Context())
+	require.NoError(t, err)
+
+	timer := &lockTimer{waits: make(chan chan time.Time, 8)}
+	deps := publish.DefaultDeps()
+	deps.FileOptions = func() []filepublish.Option {
+		return []filepublish.Option{
+			filepublish.WithTimer(timer.after), filepublish.WithPollInterval(time.Second),
+			filepublish.WithNoticeAfter(2 * time.Second),
+		}
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	type outcome struct {
+		out  string
+		code int
+	}
+
+	done := make(chan outcome, 1)
+
+	go func() {
+		out, code := rig.runWith(ctx, t, deps, rig.src, "--config", rig.config)
+		done <- outcome{out: out, code: code}
+	}()
+
+	// the two objects wait for the lock at once: a round ends both waits, and the next two waits prove that both went on
+	for range 2 {
+		round := []chan time.Time{<-timer.waits, <-timer.waits}
+		for _, wait := range round {
+			wait <- time.Time{}
+		}
+	}
+
+	<-timer.waits
+	<-timer.waits // both waits are back after two seconds: the notice was given
+
+	cancel()
+
+	got := <-done
+	assert.Equal(t, helper.ExitFailure, got.code, got.out)
+	assert.Equal(
+		t,
+		1,
+		strings.Count(got.out, "waiting for the publish lock "+filepath.Join(rig.store, ".semaphore-publish.lock")),
+	)
+	assert.Contains(t, got.out, context.Canceled.Error())
+	assert.Contains(t, got.out, filepublish.ErrLockWait.Error())
+
+	_, err = os.Stat(filepath.Join(rig.store, "manifests", "stable.yaml"))
+	require.ErrorIs(t, err, os.ErrNotExist, "nothing was published")
+
+	// the lock is released: the same command goes through
+	release()
+
+	out, code := rig.run(t, rig.src, "--config", rig.config)
+	assert.Zero(t, code, out)
+}
+
+// noWrites is a store of a platform that cannot lock: it has no manifest and refuses every write.
+type noWrites struct{}
+
+func (noWrites) GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	return nil, &smithy.GenericAPIError{Code: "NoSuchKey"}
+}
+
+func (noWrites) HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	return nil, &smithy.GenericAPIError{Code: "NoSuchKey"}
+}
+
+func (noWrites) PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	return nil, filepublish.ErrUnsupported
+}
+
+func TestFileStoreWriteOnAPlatformWithoutALockIsInvalid(t *testing.T) {
+	t.Parallel()
+
+	rig := newFileRig(t)
+	deps := publish.DefaultDeps()
+	deps.NewAPI = func(context.Context, *connection.S3Spec, string) (s3publish.API, error) { return noWrites{}, nil }
+
+	out, code := rig.runWith(t.Context(), t, deps, rig.src, "--config", rig.config)
+	assert.Equal(t, helper.ExitInvalid, code, out)
+	assert.Contains(t, out, filepublish.ErrUnsupported.Error())
+}
+
+func TestFileStoreRefusesKeysThatAreNotPortable(t *testing.T) {
+	t.Parallel()
+
+	rig := newFileRig(t)
+
+	out, code := rig.run(t, rig.src, "--config", rig.config, "--prefix", "con")
+	assert.Equal(t, helper.ExitInvalid, code, out)
+	assert.Contains(t, out, "Windows device name")
 }

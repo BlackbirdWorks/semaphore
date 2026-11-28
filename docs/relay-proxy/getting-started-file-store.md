@@ -10,7 +10,7 @@ each block in the same shell and the same directory.
 
 You need the binaries `semaphore` (the relay) and `semaphore-cli` on your `PATH`. Build them with
 `task build-relayproxy build-cli` (they land in `out/bin/`), or see [installation](install.md). `publish` writes to a
-directory on Linux and macOS.
+directory on Linux, macOS and Windows.
 
 ## 1. Write the bootstrap file
 

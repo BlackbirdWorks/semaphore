@@ -13,6 +13,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -45,19 +47,26 @@ var (
 	ErrUnsupported = errors.New("filepublish: writing to a file store is not supported on this platform")
 	// ErrChecksum is the cause of a body that does not have the checksum the caller announced.
 	ErrChecksum = errors.New("filepublish: body does not match its checksum")
+	// ErrLockWait is the cause of a wait for the lock that ended because the context ended; the error also wraps the
+	// error of the context.
+	ErrLockWait = errors.New("filepublish: wait for the publish lock ended")
+	// ErrTooLarge is the cause of a body over the limit of the store (see [WithMaxBodyBytes]).
+	ErrTooLarge = errors.New("filepublish: body is over the size limit")
 )
 
 // Store is an [s3publish.API] over a directory. It holds no state besides the path of the root: it is safe for
 // concurrent use, and the root is opened on each call.
 type Store struct {
-	root string
+	root    string
+	set     settings
+	noticed atomic.Bool
 }
 
 var _ s3publish.API = (*Store)(nil)
 
 // New returns the store of the directory root, which must exist and be a directory (the relay does not create it
 // either). A relative path is made absolute against the working directory, as the reader does.
-func New(root string) (*Store, error) {
+func New(root string, opts ...Option) (*Store, error) {
 	if root == "" {
 		return nil, fmt.Errorf("%w: the root directory is empty", ErrKeyRefused)
 	}
@@ -76,17 +85,22 @@ func New(root string) (*Store, error) {
 		return nil, fmt.Errorf("%w: %q is not a directory", ErrNotRegular, root)
 	}
 
-	return &Store{root: abs}, nil
+	return &Store{root: abs, set: newSettings(opts)}, nil
 }
 
 func apiError(code, message string) error {
 	return &smithy.GenericAPIError{Code: code, Message: message}
 }
 
-// checkKey refuses a key that is not a clean relative slash path.
+// checkKey refuses a key that is not a clean relative slash path, and one that is not portable (see portableKey).
 func checkKey(key *string) (string, error) {
 	if key == nil || !manifestreader.ValidFileKey(*key) {
 		return "", fmt.Errorf("%w: %q", ErrKeyRefused, aws.ToString(key))
+	}
+
+	err := portableKey(*key)
+	if err != nil {
+		return "", err
 	}
 
 	return *key, nil
@@ -215,9 +229,13 @@ func (s *Store) PutObject(
 		return nil, err
 	}
 
-	body, err := io.ReadAll(input.Body)
+	body, err := io.ReadAll(io.LimitReader(input.Body, s.set.maxBody+1))
 	if err != nil {
 		return nil, fmt.Errorf("put %s: read body: %w", key, err)
+	}
+
+	if int64(len(body)) > s.set.maxBody {
+		return nil, fmt.Errorf("%w: %s is over %d bytes", ErrTooLarge, key, s.set.maxBody)
 	}
 
 	sum := sha256.Sum256(body)
@@ -233,7 +251,7 @@ func (s *Store) PutObject(
 
 	defer func() { _ = root.Close() }()
 
-	unlock, err := lock(root)
+	unlock, err := s.acquire(ctx, root)
 	if err != nil {
 		return nil, err
 	}
@@ -324,9 +342,9 @@ func writeAside(root *os.Root, key string, body []byte) error {
 	rel := manifestreader.FileKeyPath(key)
 
 	if dir != "." {
-		err := root.MkdirAll(manifestreader.FileKeyPath(dir), dirMode)
+		err := ensureDirs(root, dir)
 		if err != nil {
-			return fmt.Errorf("create directory: %w", err)
+			return err
 		}
 	}
 
@@ -373,18 +391,30 @@ func writeSynced(root *os.Root, name string, body []byte) error {
 	return nil
 }
 
-// syncDir flushes a directory so that the rename in it survives a crash.
-func syncDir(root *os.Root, dir string) error {
-	handle, err := root.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open directory: %w", err)
-	}
+// ensureDirs creates the missing directories of dir (a slash path) one by one, and flushes each new one and the
+// directory that holds it, so that the new entries survive a crash like the renamed file does.
+func ensureDirs(root *os.Root, dir string) error {
+	current := ""
 
-	err = handle.Sync()
+	for part := range strings.SplitSeq(dir, "/") {
+		parent := current
+		current = path.Join(current, part)
+		rel := manifestreader.FileKeyPath(current)
 
-	err = errors.Join(err, handle.Close())
-	if err != nil {
-		return fmt.Errorf("sync directory: %w", err)
+		_, err := root.Lstat(rel)
+		if err == nil {
+			continue
+		}
+
+		err = root.Mkdir(rel, dirMode)
+		if err != nil {
+			return fmt.Errorf("create directory: %w", err)
+		}
+
+		err = errors.Join(syncDir(root, rel), syncDir(root, manifestreader.FileKeyPath(path.Join(".", parent))))
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

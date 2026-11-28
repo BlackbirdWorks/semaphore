@@ -6,13 +6,18 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/blackbirdworks/semaphore/cmd/relayproxy/controlsource"
+	"github.com/blackbirdworks/semaphore/cmd/relayproxy/corehttp"
+	"github.com/blackbirdworks/semaphore/cmd/relayproxy/flagruntime"
 	"github.com/blackbirdworks/semaphore/cmd/relayproxy/model"
+	"github.com/blackbirdworks/semaphore/cmd/relayproxy/relaycore"
 	"github.com/blackbirdworks/semaphore/controlplane"
 	"github.com/blackbirdworks/semaphore/internal/manifestreader"
 )
@@ -123,4 +128,80 @@ func TestInfo_UnknownFieldsSurviveARestartFromTheStateDirectory(t *testing.T) {
 
 	require.Equal(t, manifestreader.RestoreRestored, second.core.Status().Source.Reader.State.Restore)
 	assert.Equal(t, want, configInfoOf(t, second.url).Config.UnknownFields)
+}
+
+// objectsWithUnknownFields builds the status of count flag objects, each with unknown fields, with names that sort
+// in both orders (digits, dashes and letters).
+func objectsWithUnknownFields(count int) map[string]*flagruntime.ObjectStatus {
+	objects := make(map[string]*flagruntime.ObjectStatus, count)
+
+	for i := range count {
+		name := fmt.Sprintf("o%04d", i)
+		if i%3 == 0 {
+			name = fmt.Sprintf("o%04d-x", i/2)
+		}
+
+		objects[name] = &flagruntime.ObjectStatus{
+			Name: name, Kind: controlplane.KindFlags, UnknownFields: 2,
+			UnknownFieldPaths: []string{fmt.Sprintf("flag-%d.b", i%7), fmt.Sprintf("flag-%d.a", i%5)},
+		}
+	}
+
+	return objects
+}
+
+func statusOf(objects map[string]*flagruntime.ObjectStatus) *relaycore.Status {
+	return &relaycore.Status{Source: controlsource.Status{Runtime: &flagruntime.Status{Objects: objects}}}
+}
+
+// The ten paths are the ten smallest of all of them, in order: the same as a sort of every path, with an
+// allocation count that does not grow with the number of objects.
+//
+// The test is serial: AllocsPerRun counts the allocations of the whole process, so no parallel test may run during it.
+// t.Chdir makes the test serial for the runner and for paralleltest alike.
+func TestUnknownFieldsInfoKeepsTheTenSmallestPaths(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	reference := func(objects map[string]*flagruntime.ObjectStatus) ([]string, int) {
+		var all []string
+
+		count := 0
+
+		for _, obj := range objects {
+			count += obj.UnknownFields
+
+			for _, field := range obj.UnknownFieldPaths {
+				all = append(all, obj.Name+"/"+field)
+			}
+		}
+
+		slices.Sort(all)
+
+		return all[:min(10, len(all))], count
+	}
+
+	tests := []struct {
+		name    string
+		objects int
+	}{
+		{name: "few", objects: 4},
+		{name: "five thousand", objects: 5000},
+	}
+
+	allocs := make([]float64, len(tests))
+
+	for i, tt := range tests {
+		objects := objectsWithUnknownFields(tt.objects)
+		status := statusOf(objects)
+		wantFields, wantCount := reference(objects)
+
+		got := corehttp.UnknownFieldsInfo(status)
+		require.Len(t, got, 1, tt.name)
+		assert.Equal(t, wantFields, got[0].Fields, tt.name)
+		assert.Equal(t, wantCount, got[0].Count, tt.name)
+
+		allocs[i] = testing.AllocsPerRun(5, func() { _ = corehttp.UnknownFieldsInfo(status) })
+	}
+
+	assert.InDelta(t, allocs[0], allocs[1], 8, "allocations do not grow with the number of objects: %v", allocs)
 }

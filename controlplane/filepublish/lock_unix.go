@@ -9,27 +9,22 @@ import (
 	"syscall"
 )
 
-// lock takes the exclusive advisory lock of the store and returns the function that releases it. It blocks until
-// the lock is free: the sections it protects are short. The lock is tied to the open file, so the system releases
-// it when the process dies.
-func lock(root *os.Root) (func(), error) {
-	file, err := root.OpenFile(lockName, os.O_RDWR|os.O_CREATE, lockMode)
-	if err != nil {
-		return nil, fmt.Errorf("lock file: %w", err)
-	}
-
+// tryLock asks for the exclusive lock without waiting: false when another holder has it.
+func tryLock(file *os.File) (bool, error) {
 	for {
-		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
-		if !errors.Is(err, syscall.EINTR) {
-			break
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, syscall.EINTR):
+		case errors.Is(err, syscall.EWOULDBLOCK):
+			return false, nil
+		default:
+			return false, fmt.Errorf("flock: %w", err)
 		}
 	}
-
-	if err != nil {
-		_ = file.Close()
-
-		return nil, fmt.Errorf("lock %s: %w", lockName, err)
-	}
-
-	return func() { _ = file.Close() }, nil
 }
+
+// releaseLock gives the lock back: the system drops it when the descriptor closes, or when the process dies.
+func releaseLock(file *os.File) { _ = file.Close() }

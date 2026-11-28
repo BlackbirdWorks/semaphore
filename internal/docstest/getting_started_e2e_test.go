@@ -14,7 +14,7 @@ const emulator = "semaphore-s3"
 func TestGettingStartedRunsAsWritten(t *testing.T) {
 	t.Parallel()
 
-	runPage(t, gettingPage, func(ctx context.Context) {
+	runPage(t, gettingPage, "1031", func(ctx context.Context) {
 		_ = exec.CommandContext(ctx, "docker", "rm", "-f", emulator).Run()
 	})
 }

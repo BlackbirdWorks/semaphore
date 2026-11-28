@@ -40,8 +40,8 @@ const (
 )
 
 // relayOn starts the relay core on the bootstrap file of the rig, with its own polling loop, and serves its HTTP
-// handler. It returns the base URL.
-func (r *fileRig) relayOn(t *testing.T) string {
+// handler. It returns the base URL and the core, whose status counts the polls.
+func (r *fileRig) relayOn(t *testing.T) (string, *relaycore.Core) {
 	t.Helper()
 
 	raw, err := os.ReadFile(r.config)
@@ -82,12 +82,12 @@ func (r *fileRig) relayOn(t *testing.T) string {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
-	return ts.URL
+	return ts.URL, core
 }
 
-// evaluate returns the value of the flag checkout-new, or an error while the relay does not serve it yet.
-func evaluate(ctx context.Context, base string) (bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/ofrep/v1/evaluate/flags/checkout-new",
+// evaluate returns the value of the flag, or an error while the relay does not serve it yet.
+func evaluate(ctx context.Context, base, flag string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/ofrep/v1/evaluate/flags/"+flag,
 		strings.NewReader(`{"context": {"targetingKey": "user-1"}}`))
 	if err != nil {
 		return false, fmt.Errorf("request: %w", err)
@@ -126,8 +126,15 @@ var errNotServed = errors.New("the flag is not served")
 func awaitValue(t *testing.T, base string, want bool) {
 	t.Helper()
 
+	awaitFlag(t, base, "checkout-new", want)
+}
+
+// awaitFlag waits until the relay evaluates the flag to want.
+func awaitFlag(t *testing.T, base, flag string, want bool) {
+	t.Helper()
+
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
-		got, err := evaluate(t.Context(), base)
+		got, err := evaluate(t.Context(), base, flag)
 		if assert.NoError(c, err) {
 			assert.Equal(c, want, got)
 		}
@@ -146,7 +153,7 @@ func TestFileStorePublishThenRelayServesAndFollowsAChange(t *testing.T) {
 	out, code := rig.run(t, rig.src, "--config", rig.config)
 	require.Zero(t, code, out)
 
-	base := rig.relayOn(t)
+	base, _ := rig.relayOn(t)
 	awaitValue(t, base, false)
 
 	rig.writeFlags(t, flagsDefaulting("on"))
@@ -158,7 +165,16 @@ func TestFileStorePublishThenRelayServesAndFollowsAChange(t *testing.T) {
 	awaitValue(t, base, true)
 }
 
-func TestFileStoreConcurrentPublishesNeverCorruptTheStore(t *testing.T) {
+// published is the part of the JSON output of a publish that names what it wrote.
+type published struct {
+	Objects []struct {
+		Name string `json:"name"`
+		Key  string `json:"key"`
+	} `json:"objects"`
+	Generation uint64 `json:"generation"`
+}
+
+func TestFileStoreConcurrentPublishesLeaveOneCompleteGeneration(t *testing.T) {
 	t.Parallel()
 
 	rig := newFileRig(t)
@@ -166,48 +182,91 @@ func TestFileStoreConcurrentPublishesNeverCorruptTheStore(t *testing.T) {
 	_, code := rig.run(t, rig.src, "--config", rig.config)
 	require.Zero(t, code)
 
-	// two sources that differ from the published one and from each other
+	// two sources, each with a flag of its own that the other does not have
 	sources := make([]*fileRig, 2)
+	flags := make([]string, len(sources))
 
 	for i := range sources {
+		flags[i] = fmt.Sprintf("checkout-%d", i)
 		sources[i] = &fileRig{src: filepath.Join(t.TempDir(), "src"), store: rig.store, config: rig.config}
-		sources[i].write(
-			t,
-			"flags/checkout.yaml",
-			strings.Replace(fileFlagsDoc, "checkout-new", fmt.Sprintf("checkout-%d", i), 1),
-		)
+		sources[i].write(t, "flags/checkout.yaml", strings.Replace(fileFlagsDoc, "checkout-new", flags[i], 1))
 		sources[i].write(t, "flagsets/web.yaml", fileFlagSetDoc)
 	}
 
+	outs := make([]string, len(sources))
 	codes := make([]int, len(sources))
 
 	var wg sync.WaitGroup
 
 	for i, source := range sources {
-		wg.Go(func() { _, codes[i] = source.run(t, source.src, "--config", rig.config) })
+		wg.Go(func() { outs[i], codes[i] = source.run(t, "-o", "json", source.src, "--config", rig.config) })
 	}
 
 	wg.Wait()
 
-	wins := 0
+	wins := map[uint64]int{} // generation to the index of the publisher
 
-	for _, c := range codes {
-		switch c {
-		case 0:
-			wins++
-		default:
-			assert.Equal(t, helper.ExitConflict, c, "a publisher that did not win gets the conflict code")
+	for i, code := range codes {
+		if code == 0 {
+			var res published
+
+			require.NoError(t, json.Unmarshal([]byte(outs[i]), &res), outs[i])
+			wins[res.Generation] = i
+
+			continue
 		}
+
+		assert.Equal(t, helper.ExitConflict, code, "a publisher that did not win gets the conflict code: %s", outs[i])
 	}
 
-	require.GreaterOrEqual(t, wins, 1, "one publisher always wins")
+	require.NotEmpty(t, wins, "one publisher always wins")
 
-	manifest, err := os.ReadFile(filepath.Join(rig.store, "manifests", "stable.yaml"))
+	raw, err := os.ReadFile(filepath.Join(rig.store, "manifests", "stable.yaml"))
 	require.NoError(t, err)
-	assert.Contains(t, string(manifest), fmt.Sprintf("generation: %d", 1+wins))
+
+	manifest, _, err := controlplane.UnmarshalManifest(raw)
+	require.NoError(t, err)
+
+	winner, ok := wins[manifest.Generation]
+	require.True(
+		t,
+		ok,
+		"the manifest is the one of a publisher that succeeded: generation %d, wins %v",
+		manifest.Generation,
+		wins,
+	)
+
+	var res published
+
+	require.NoError(t, json.Unmarshal([]byte(outs[winner]), &res))
+
+	listed := map[string]string{}
+	for _, obj := range res.Objects {
+		listed[obj.Name] = obj.Key
+	}
+
+	got := map[string]string{}
+
+	for i := range manifest.Objects {
+		obj := &manifest.Objects[i]
+		got[obj.Name] = obj.Key
+
+		body, readErr := os.ReadFile(filepath.Join(rig.store, filepath.FromSlash(obj.Key)))
+		require.NoError(t, readErr)
+		require.NoError(t, controlplane.VerifyChecksum(body, obj.Checksum), obj.Key)
+	}
+
+	assert.Equal(t, listed, got, "the manifest lists the objects of the publisher that wrote it")
 
 	out, vcode := rig.run(t, "verify", "--config", rig.config)
 	assert.Zero(t, vcode, out)
+
+	// the relay serves the values of that publisher, never a mix
+	base, _ := rig.relayOn(t)
+	awaitFlag(t, base, flags[winner], false)
+
+	_, err = evaluate(t.Context(), base, flags[1-winner])
+	require.ErrorIs(t, err, errNotServed)
 }
 
 // failManifest fails the write of the manifest: the publisher was killed after the objects.
@@ -244,7 +303,7 @@ func TestFileStoreAPublishKilledBeforeTheManifestLeavesThePreviousGeneration(t *
 	out, code := rig.run(t, rig.src, "--config", rig.config)
 	require.Zero(t, code, out)
 
-	base := rig.relayOn(t)
+	base, core := rig.relayOn(t)
 	awaitValue(t, base, false)
 
 	manifestPath := filepath.Join(rig.store, "manifests", "stable.yaml")
@@ -276,12 +335,17 @@ func TestFileStoreAPublishKilledBeforeTheManifestLeavesThePreviousGeneration(t *
 	require.NoError(t, err)
 	assert.True(t, bytes.Equal(before, after), "the manifest is untouched")
 
-	// the relay stays on the previous generation, through at least one more poll of its
-	require.Never(t, func() bool {
-		got, evalErr := evaluate(t.Context(), base)
+	// the relay polls the manifest at least twice more, and still serves the previous generation
+	polled := core.Status().Source.Reader.Polls
 
-		return evalErr != nil || got
-	}, 3*time.Second, fileTick)
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.GreaterOrEqual(c, core.Status().Source.Reader.Polls, polled+2)
+	}, fileWait, fileTick)
+
+	got, err := evaluate(t.Context(), base, "checkout-new")
+	require.NoError(t, err)
+	assert.False(t, got, "the value is the one of the previous generation")
+	assert.Equal(t, uint64(1), core.Status().Source.Runtime.Generation)
 
 	// the objects of the killed run are on disk but unreferenced: the next publish reuses them and goes live
 	rig.writeFlags(t, flagsDefaulting("on"))

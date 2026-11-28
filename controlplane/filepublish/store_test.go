@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -123,6 +124,24 @@ func TestKeysAreRefused(t *testing.T) {
 		{name: "trailing slash", key: "a/"},
 		{name: "backslash", key: `a\b`},
 		{name: "nul", key: "a\x00b"},
+		{name: "the lock file", key: ".semaphore-publish.lock"},
+		{name: "the lock file in a directory", key: "manifests/.semaphore-publish.lock"},
+		{name: "the lock file in other case", key: ".SEMAPHORE-Publish.Lock"},
+		{name: "a file written aside", key: "manifests/.tmp-1234"},
+		{name: "a directory written aside", key: ".TMP-x/stable.yaml"},
+		{name: "device CON", key: "CON"},
+		{name: "device with an extension", key: "dir/nul.txt"},
+		{name: "device in lower case", key: "aux"},
+		{name: "device COM1", key: "COM1"},
+		{name: "device LPT9 with an extension", key: "a/LPT9.log"},
+		{name: "device with a trailing space", key: "con /x"},
+		{name: "trailing dot", key: "a/b."},
+		{name: "trailing space", key: "a/b "},
+		{name: "colon", key: "a:b"},
+		{name: "colon stream", key: "stable.yaml:stream"},
+		{name: "angle bracket", key: "a<b"},
+		{name: "question mark", key: "a?b"},
+		{name: "control character", key: "a\x01b"},
 	}
 
 	for _, tt := range tests {
@@ -547,13 +566,15 @@ func TestTwoPublishersOverOneManifestHaveOneWinner(t *testing.T) {
 
 	gated := &gate{API: store, arrived: make(chan struct{}, 2), release: make(chan struct{})}
 
+	labels := []string{"left", "right"}
+	results := make([]*s3publish.Result, 2)
 	errs := make([]error, 2)
 
 	var wg sync.WaitGroup
 
-	for i, label := range []string{"left", "right"} {
+	for i, label := range labels {
 		wg.Go(func() {
-			_, errs[i] = publisher(
+			results[i], errs[i] = publisher(
 				t,
 				gated,
 			).Publish(context.Background(), s3publish.Request{Objects: objectsFor(t, label)})
@@ -565,27 +586,44 @@ func TestTwoPublishersOverOneManifestHaveOneWinner(t *testing.T) {
 	close(gated.release)
 	wg.Wait()
 
-	var conflicts, wins int
+	winner := -1
 
-	for _, e := range errs {
-		switch {
-		case e == nil:
-			wins++
-		case errors.Is(e, s3publish.ErrConflict):
-			conflicts++
+	for i, publishErr := range errs {
+		if publishErr != nil {
+			require.ErrorIs(t, publishErr, s3publish.ErrConflict)
+
+			continue
 		}
+
+		require.Equal(t, -1, winner, "only one publisher wins")
+
+		winner = i
 	}
 
-	assert.Equal(t, 1, wins)
-	assert.Equal(t, 1, conflicts)
+	require.NotEqual(t, -1, winner, "one publisher wins")
+
+	raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(manifestKey)))
+	require.NoError(t, err)
+
+	manifest, _, err := controlplane.UnmarshalManifest(raw)
+	require.NoError(t, err)
+
+	assert.Equal(t, results[winner].Generation, manifest.Generation)
+	require.Len(t, manifest.Objects, len(results[winner].Objects))
+
+	for i := range manifest.Objects {
+		obj := &manifest.Objects[i]
+		assert.Equal(t, results[winner].Objects[i].Key, obj.Key, "the manifest lists the objects of the winner")
+
+		body, readErr := os.ReadFile(filepath.Join(dir, filepath.FromSlash(obj.Key)))
+		require.NoError(t, readErr)
+		require.NoError(t, controlplane.VerifyChecksum(body, obj.Checksum))
+		assert.Equal(t, objectsFor(t, labels[winner])[0].Body, body, "the flags are the ones of the winner")
+	}
 
 	rep, err := publisher(t, store).Verify(t.Context())
 	require.NoError(t, err)
 	assert.True(t, rep.OK())
-
-	manifest, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(manifestKey)))
-	require.NoError(t, err)
-	assert.Contains(t, string(manifest), "generation: 2")
 }
 
 func TestFailuresOfTheFileSystemAreErrors(t *testing.T) {
@@ -660,7 +698,7 @@ func TestFailuresOfTheFileSystemAreErrors(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o600))
 			},
 			run:    func(store *filepublish.Store) error { return put(store, "f/x", "x", nil) },
-			wantIs: syscall.EEXIST,
+			wantIs: syscall.ENOTDIR,
 		},
 	}
 
@@ -677,4 +715,151 @@ func TestFailuresOfTheFileSystemAreErrors(t *testing.T) {
 			require.ErrorIs(t, tt.run(store), tt.wantIs)
 		})
 	}
+}
+
+func TestPortableKeysAreAccepted(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newStore(t)
+
+	keys := []string{
+		"manifests/stable.yaml", "objects/sha256/ab/cd.json", "..data/manifest.yaml", "console.yaml", "com10",
+		"a.tmp-b",
+	}
+
+	for _, key := range keys {
+		require.NoError(t, put(store, key, "x", nil), key)
+	}
+}
+
+func TestBodyOverTheLimitIsRefused(t *testing.T) {
+	t.Parallel()
+
+	store, err := filepublish.New(t.TempDir(), filepublish.WithMaxBodyBytes(4))
+	require.NoError(t, err)
+
+	require.NoError(t, put(store, "a", "1234", nil))
+	require.ErrorIs(t, put(store, "b", "12345", nil), filepublish.ErrTooLarge)
+}
+
+// lockClock is the timer of a lock wait that the test drives: every wait is announced and ended by the test.
+type lockClock struct {
+	waits chan chan time.Time
+}
+
+func (lc *lockClock) after(time.Duration) <-chan time.Time {
+	tick := make(chan time.Time, 1)
+	lc.waits <- tick
+
+	return tick
+}
+
+// advance ends the current wait and returns the next one, announced by the loop when it waits again.
+func (lc *lockClock) advance(t *testing.T, current chan time.Time) chan time.Time {
+	t.Helper()
+
+	current <- time.Time{}
+
+	select {
+	case next := <-lc.waits:
+		return next
+	case <-t.Context().Done():
+		require.FailNow(t, "the lock wait did not go on")
+	}
+
+	return nil
+}
+
+// lockRig is a store whose lock is held, and a store that waits for it with a clock that the test drives.
+type lockRig struct {
+	waiter  *filepublish.Store
+	release func()
+	clock   *lockClock
+	notices chan string
+	dir     string
+}
+
+func heldLock(t *testing.T) *lockRig {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	holder, err := filepublish.New(dir)
+	require.NoError(t, err)
+
+	release, err := holder.Lock(t.Context())
+	require.NoError(t, err)
+
+	clock := &lockClock{waits: make(chan chan time.Time)}
+	notices := make(chan string, 8)
+
+	waiter, err := filepublish.New(dir, filepublish.WithTimer(clock.after), filepublish.WithPollInterval(time.Second),
+		filepublish.WithNoticeAfter(2*time.Second), filepublish.WithNotice(func(msg string) { notices <- msg }))
+	require.NoError(t, err)
+
+	return &lockRig{waiter: waiter, release: release, clock: clock, notices: notices, dir: dir}
+}
+
+func TestLockWaitGivesOneNoticeAndEndsWithTheContext(t *testing.T) {
+	t.Parallel()
+
+	rig := heldLock(t)
+	waiter, clock, notices, dir := rig.waiter, rig.clock, rig.notices, rig.dir
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+
+	go func() { _, lockErr := waiter.Lock(ctx); done <- lockErr }()
+
+	wait := <-clock.waits
+
+	assert.Empty(t, notices, "no notice before the wait is long")
+
+	wait = clock.advance(t, wait)
+
+	assert.Empty(t, notices, "no notice after one second")
+
+	wait = clock.advance(t, wait)
+
+	require.Len(t, notices, 1, "one notice after two seconds")
+	assert.Equal(t, "waiting for the publish lock "+filepath.Join(dir, ".semaphore-publish.lock"), <-notices)
+
+	_ = clock.advance(t, wait)
+
+	assert.Empty(t, notices, "the notice is given once")
+
+	cancel()
+
+	lockErr := <-done
+	require.ErrorIs(t, lockErr, context.Canceled)
+	require.ErrorIs(t, lockErr, filepublish.ErrLockWait)
+}
+
+func TestLockWaitProceedsWhenTheLockIsReleased(t *testing.T) {
+	t.Parallel()
+
+	rig := heldLock(t)
+	waiter, release, clock, dir := rig.waiter, rig.release, rig.clock, rig.dir
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, putErr := waiter.PutObject(
+			t.Context(),
+			&s3.PutObjectInput{Key: aws.String("a"), Body: strings.NewReader("x")},
+		)
+		done <- putErr
+	}()
+
+	wait := <-clock.waits
+
+	release()
+
+	wait <- time.Time{}
+
+	require.NoError(t, <-done)
+
+	got, err := os.ReadFile(filepath.Join(dir, "a"))
+	require.NoError(t, err)
+	assert.Equal(t, "x", string(got))
 }

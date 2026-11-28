@@ -242,7 +242,7 @@ func runPublish(ctx context.Context, streams *helper.Streams, dir string, opts *
 	tgt.cfg.Check = checkObject
 	tgt.cfg.CheckAll = checkReferences
 
-	pub, err := newPublisher(ctx, tgt, deps)
+	pub, err := newPublisher(ctx, tgt, deps, func(msg string) { _, _ = fmt.Fprintln(streams.Stderr, msg) })
 	if err != nil {
 		return withCode(err)
 	}
@@ -330,12 +330,22 @@ func leaves(err error) []error {
 	return []error{err}
 }
 
-func newPublisher(ctx context.Context, tgt *target, deps *Deps) (*s3publish.Publisher, error) {
+// newPublisher builds the publisher of the target; notice receives the message of a lock that stays busy.
+func newPublisher(ctx context.Context, tgt *target, deps *Deps, notice func(string)) (*s3publish.Publisher, error) {
 	var api s3publish.API
 
 	switch {
-	case tgt.root != "":
-		store, err := filepublish.New(tgt.root)
+	case tgt.root != "" && deps.NewAPI == nil:
+		opts := []filepublish.Option{
+			filepublish.WithNotice(notice),
+			filepublish.WithMaxBodyBytes(max(tgt.cfg.MaxObjectBytes, tgt.cfg.MaxManifestBytes)),
+		}
+
+		if deps.FileOptions != nil {
+			opts = append(opts, deps.FileOptions()...)
+		}
+
+		store, err := filepublish.New(tgt.root, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("connection %s: %w", tgt.name, err)
 		}
@@ -381,7 +391,7 @@ func runVerify(ctx context.Context, streams *helper.Streams, opts *Cmd, deps *De
 	tgt.cfg.Check = checkObject
 	tgt.cfg.CheckAll = checkReferences
 
-	pub, err := newPublisher(ctx, tgt, deps)
+	pub, err := newPublisher(ctx, tgt, deps, nil)
 	if err != nil {
 		return withCode(err)
 	}
@@ -422,7 +432,10 @@ func codeOf(err error) int {
 	switch {
 	case errors.Is(err, s3publish.ErrConflict):
 		return helper.ExitConflict
-	case errors.Is(err, filepublish.ErrKeyRefused):
+	case errors.Is(err, filepublish.ErrLockWait):
+		return helper.ExitFailure
+	case errors.Is(err, filepublish.ErrKeyRefused), errors.Is(err, filepublish.ErrTooLarge),
+		errors.Is(err, filepublish.ErrUnsupported):
 		return helper.ExitInvalid
 	case errors.As(err, new(*s3publish.OperationError)):
 		return helper.ExitTransport
