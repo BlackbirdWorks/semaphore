@@ -125,7 +125,7 @@ func (r *response) claimETag() {
 	var ids []string
 
 	for _, id := range r.observed {
-		if ofrepconformance.KindOf(id) == ofrepconformance.KindHeader && strings.HasSuffix(id, " ETag") {
+		if ofrepconformance.KindOf(id) == ofrepconformance.KindHeader && strings.HasSuffix(id, " "+http.CanonicalHeaderKey("ETag")) {
 			ids = append(ids, id)
 		}
 	}
