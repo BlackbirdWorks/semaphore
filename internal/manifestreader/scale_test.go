@@ -37,7 +37,12 @@ func TestReader_TwentyThousandObjects(t *testing.T) {
 	objs := scaleObjects(count)
 	publishJSON(t, store, 1, objs...)
 
-	rdr := startBoundedRig(t, store, &manifestreader.Config{FetchConcurrency: manifestreader.MaxFetchConcurrency}, scaleWait)
+	rdr := startBoundedRig(
+		t,
+		store,
+		&manifestreader.Config{FetchConcurrency: manifestreader.MaxFetchConcurrency},
+		scaleWait,
+	)
 
 	// cold start: the manifest and one GET per object
 	assert.Equal(t, coldCalls(t, objs...), store.takeCalls())
