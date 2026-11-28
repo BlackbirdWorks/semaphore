@@ -3,6 +3,7 @@ package manifestreader_test
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,6 +25,9 @@ func scaleObjects(n int) []obj {
 	return objs
 }
 
+// scaleWait is the failure bound of a round of the largest manifest: the cold round hashes and decodes every object.
+const scaleWait = 2 * time.Minute
+
 func TestReader_TwentyThousandObjects(t *testing.T) {
 	t.Parallel()
 
@@ -33,7 +37,7 @@ func TestReader_TwentyThousandObjects(t *testing.T) {
 	objs := scaleObjects(count)
 	publishJSON(t, store, 1, objs...)
 
-	rdr := startRig(t, store, &manifestreader.Config{FetchConcurrency: manifestreader.MaxFetchConcurrency})
+	rdr := startBoundedRig(t, store, &manifestreader.Config{FetchConcurrency: manifestreader.MaxFetchConcurrency}, scaleWait)
 
 	// cold start: the manifest and one GET per object
 	assert.Equal(t, coldCalls(t, objs...), store.takeCalls())
