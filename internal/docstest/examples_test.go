@@ -122,7 +122,13 @@ func TestGettingStartedBlocksAreMarked(t *testing.T) {
 		{lang: "text", wantMarker: markerOutput},
 	}
 
-	blocks := fences(t, gettingPage)
+	pagesToCheck := []string{gettingPage, gettingFilePage}
+	blocks := make([]fence, 0, 2*len(pagesToCheck))
+
+	for _, page := range pagesToCheck {
+		blocks = append(blocks, fences(t, page)...)
+	}
+
 	require.NotEmpty(t, blocks)
 
 	seen := map[string]int{}

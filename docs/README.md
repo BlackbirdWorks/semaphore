@@ -9,7 +9,7 @@ Plain-Markdown documentation for the relay proxy and the Go engine.
 ## Relay proxy
 - [Overview](relay-proxy/README.md)
 - [Installation](relay-proxy/install.md) and [Releasing](RELEASING.md)
-- [Getting started](relay-proxy/getting-started.md)
+- [Getting started](relay-proxy/getting-started.md) and [with a file store](relay-proxy/getting-started-file-store.md) (no emulator)
 - [Bootstrap file, version 2](relay-proxy/bootstrap-config.md) (the configuration of the relay: connections, flag sets, API keys, exporters)
 - [Schema reference](reference/schema.md) (generated: bootstrap file, manifest, flag-set and segments documents)
 - [Relay core](relay-proxy/relay-core.md) (how the relay starts, reloads in place and shuts down)

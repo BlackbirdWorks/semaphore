@@ -186,16 +186,14 @@ func (s *FileStore) Get(ctx context.Context, req GetRequest) (Object, error) {
 
 // open opens the key under the root without blocking, and returns the file with the size it had.
 func (s *FileStore) open(key string) (*os.File, int64, error) {
-	// "/." makes the lookup itself require a directory (ENOTDIR otherwise): a FIFO that took the place of the root
-	// is refused before it is opened, where os.OpenRoot would open it, and wait for a writer.
-	root, err := os.OpenRoot(s.root + string(filepath.Separator) + ".")
+	root, err := OpenFileRoot(s.root)
 	if err != nil {
-		return nil, 0, fmt.Errorf("%w: %w", ErrRootUnavailable, err)
+		return nil, 0, err
 	}
 
 	defer func() { _ = root.Close() }()
 
-	file, err := root.OpenFile(filepath.FromSlash(key), openFlags, 0)
+	file, err := root.OpenFile(FileKeyPath(key), openFlags, 0)
 	if err != nil {
 		return nil, 0, fmt.Errorf("open: %w", err)
 	}
@@ -217,6 +215,29 @@ func (s *FileStore) open(key string) (*os.File, int64, error) {
 
 	return file, info.Size(), nil
 }
+
+// OpenFileRoot opens the root directory of a file store the way the reader does: the lookup requires a directory,
+// so a FIFO in its place is refused before it is opened. The error is [ErrRootUnavailable]. The publisher of a
+// file store opens its root with this function, so reader and writer resolve a key in the same way.
+func OpenFileRoot(dir string) (*os.Root, error) {
+	// "/." makes the lookup itself require a directory (ENOTDIR otherwise): a FIFO that took the place of the root
+	// is refused before it is opened, where os.OpenRoot would open it, and wait for a writer.
+	root, err := os.OpenRoot(dir + string(filepath.Separator) + ".")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrRootUnavailable, err)
+	}
+
+	return root, nil
+}
+
+// FileOpenFlags are the flags with which a store opens a key to read it: read-only, and on Unix without blocking, so
+// that a FIFO that took the place of a file is refused (after the type is read from the open handle) instead of
+// waiting for a writer. The publisher opens keys with the same flags as the reader.
+const FileOpenFlags = openFlags
+
+// FileKeyPath maps a valid key (see [ValidFileKey]) to the path below the root of the store. It is the only
+// key-to-path mapping of reader and publisher.
+func FileKeyPath(key string) string { return filepath.FromSlash(key) }
 
 // ValidFileKey reports whether key is a clean relative slash path.
 func ValidFileKey(key string) bool {

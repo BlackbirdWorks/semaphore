@@ -80,6 +80,13 @@ an object of 0 bytes or over `MaxObjectBytes`, the distinct objects over `MaxTot
 `MaxManifestBytes`, more than `MaxObjects` entries. `Verify` applies the same limits. The defaults are exported by
 `controlplane` (`DefaultMaxObjectBytes`, `DefaultMaxTotalBytes`, `DefaultMaxManifestBytes`, `DefaultMaxObjects`).
 
+## Publishing to a directory
+
+`API` is the three calls of an S3 client. For a file store, `controlplane/filepublish` has a `Store` that implements it over
+a directory, so the same `Publisher` and the same protocol write a `file` connection: `filepublish.New(dir)` and
+`s3publish.New(store, &cfg)` (any non-empty `Bucket`). The write rules (rename, lock, permissions) are in the
+[publish page](../tooling/publish.md#file-store).
+
 ## Checking flag files with the engine
 
 `s3publish` imports only `controlplane` and the AWS SDK, on purpose. To also run the engine of the relay on every flag file,

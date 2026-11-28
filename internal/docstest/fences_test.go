@@ -14,6 +14,8 @@ import (
 const (
 	docsRoot    = "../../docs"
 	gettingPage = docsRoot + "/relay-proxy/getting-started.md"
+	// gettingFilePage is the variant of the page that needs no emulator.
+	gettingFilePage = docsRoot + "/relay-proxy/getting-started-file-store.md"
 
 	markerPrefix = "<!-- docs-test: "
 	markerRun    = "run"

@@ -112,7 +112,7 @@ semaphore-cli publish ./flags-repo --config bootstrap.yaml | sed -n 1p
 published generation 1 (was 0) to manifests/stable.yaml, channel stable
 ```
 
-`semaphore-cli publish` writes to S3 buckets only. See [publish](../tooling/publish.md) for the flags and the exit codes.
+See [publish](../tooling/publish.md) for the flags and the exit codes. To publish to a directory instead, with no emulator, follow [getting started with a file store](getting-started-file-store.md).
 
 ## 5. Start the relay
 
@@ -120,7 +120,7 @@ The relay runs in the background here, and writes its log to `relay.log`. It is 
 
 <!-- docs-test: run -->
 ```shell
-semaphore --config bootstrap.yaml > relay.log 2>&1 &
+semaphore --config bootstrap.yaml --listen 127.0.0.1:1031 > relay.log 2>&1 &
 echo $! > relay.pid
 until curl -sf http://127.0.0.1:1031/readyz > /dev/null; do sleep 1; done
 ```
@@ -148,7 +148,7 @@ the change is live within a few seconds. Nothing restarts.
 
 <!-- docs-test: run -->
 ```shell
-sed -i 's/variation: enabled/variation: disabled/' flags-repo/flags/checkout.yaml
+sed 's/variation: enabled/variation: disabled/' flags-repo/flags/checkout.yaml > checkout.tmp && mv checkout.tmp flags-repo/flags/checkout.yaml
 semaphore-cli publish ./flags-repo --config bootstrap.yaml | sed -n 1p
 for i in $(seq 30); do
   curl -s http://127.0.0.1:1031/ofrep/v1/evaluate/flags/new-checkout -X POST \
@@ -180,6 +180,6 @@ docker rm -f semaphore-s3
 
 - Connect an application using a standard OpenFeature SDK with [OFREP](../openfeature/ofrep.md).
 - Read the [bootstrap file reference](bootstrap-config.md) and the [schema reference](../reference/schema.md).
-- Run the relay on a directory instead of S3: see the [file store](../concepts/control-plane-file-store.md) (the example in
-  `cmd/relayproxy/testdata/dockerhub-example`). `semaphore-cli publish` cannot write to a directory yet.
+- Run the relay on a directory instead of S3: [getting started with a file store](getting-started-file-store.md) and the
+  [file store](../concepts/control-plane-file-store.md).
 - Migrating from the GO Feature Flag relay proxy: see [the migration note](../migration/from-go-feature-flag.md).

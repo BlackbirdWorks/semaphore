@@ -77,20 +77,31 @@ type Connections struct {
 	log   *slog.Logger
 	// wake makes Run dial now: a connection that became needed (the first generation binds after Run started) is
 	// not left to wait for the next tick, which would answer STORE_ERROR to the first requests of a healthy store.
-	wake  chan struct{}
-	retry time.Duration
+	wake chan struct{}
+	// stopped is closed when Run ends: a lookup that waits for a first dial stops waiting then.
+	stopped  chan struct{}
+	retry    time.Duration
+	stopOnce sync.Once
+	// running is true while Run runs: before it there is no dial to wait for.
+	running atomic.Bool
 }
 
 type connection struct {
-	dial    Dialer
-	handle  atomic.Pointer[handleBox]
-	name    string
-	kind    string
-	closeMu sync.Mutex
-	failed  atomic.Bool
-	dialing atomic.Bool
-	needed  atomic.Bool
-	closed  bool
+	owner *Connections
+	// first is closed when the first dial of the connection ended, with a client or with an error. A lookup that
+	// finds the connection not connected waits for it, and only until it is closed: once the first dial has ended,
+	// connected or failed, nobody waits any more.
+	first     chan struct{}
+	dial      Dialer
+	handle    atomic.Pointer[handleBox]
+	name      string
+	kind      string
+	firstOnce sync.Once
+	closeMu   sync.Mutex
+	failed    atomic.Bool
+	dialing   atomic.Bool
+	needed    atomic.Bool
+	closed    bool
 }
 
 type handleBox struct{ h Handle }
@@ -99,7 +110,7 @@ type handleBox struct{ h Handle }
 func NewConnections(cfg *bootstrap.Config, opts Options) *Connections {
 	out := &Connections{
 		StoreTable: New(cfg), conns: map[string]*connection{}, log: opts.Logger, retry: opts.RetryInterval,
-		wake: make(chan struct{}, 1),
+		wake: make(chan struct{}, 1), stopped: make(chan struct{}),
 	}
 
 	if out.log == nil {
@@ -120,7 +131,7 @@ func NewConnections(cfg *bootstrap.Config, opts Options) *Connections {
 		}
 
 		if dial != nil {
-			out.conns[name] = &connection{name: name, kind: kind, dial: dial}
+			out.conns[name] = &connection{name: name, kind: kind, dial: dial, owner: out, first: make(chan struct{})}
 		}
 	}
 
@@ -158,6 +169,13 @@ func (c *Connections) Bind(
 func (c *Connections) Run(ctx context.Context) {
 	ticker := time.NewTicker(c.retry)
 	defer ticker.Stop()
+
+	c.running.Store(true)
+
+	defer func() {
+		c.running.Store(false)
+		c.stopOnce.Do(func() { close(c.stopped) })
+	}()
 
 	var dials sync.WaitGroup
 
@@ -240,7 +258,7 @@ type lazyBinding struct {
 
 // Contains implements [segment.Provider].
 func (l *lazyBinding) Contains(ctx context.Context, lookups []segment.Lookup) error {
-	b, err := l.get()
+	b, err := l.get(ctx)
 	if err != nil {
 		return err
 	}
@@ -255,7 +273,7 @@ func (l *lazyBinding) Contains(ctx context.Context, lookups []segment.Lookup) er
 
 // Version implements [segment.Versioner].
 func (l *lazyBinding) Version(ctx context.Context, name string) (string, error) {
-	b, err := l.get()
+	b, err := l.get(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -275,7 +293,7 @@ func (l *lazyBinding) Version(ctx context.Context, name string) (string, error) 
 // Members implements [segment.SnapshotSource]: a connection that is not connected yields the error once and ends.
 func (l *lazyBinding) Members(ctx context.Context, name string) iter.Seq2[string, error] {
 	return func(yield func(string, error) bool) {
-		b, err := l.get()
+		b, err := l.get(ctx)
 		if err != nil {
 			yield("", err)
 
@@ -336,6 +354,9 @@ func (c *Connections) connect(ctx context.Context, dials *sync.WaitGroup) {
 // dial connects one connection and keeps the client.
 func (c *Connections) dial(ctx context.Context, name string, conn *connection) {
 	res := dialUntil(ctx, conn.dial)
+
+	// the first outcome, whichever it is, ends the wait of the lookups; a retry later waits for nobody
+	defer conn.firstOnce.Do(func() { close(conn.first) })
 
 	if res.err != nil {
 		if ctx.Err() == nil && conn.failed.CompareAndSwap(false, true) {
@@ -405,12 +426,46 @@ func (c *Connections) names() []string {
 	return names
 }
 
-func (l *lazyBinding) get() (*flagruntime.Binding, error) {
+// await waits for the first dial of the connection to end, when one is under way: a connection that became needed
+// with a generation is dialled at once by Run, and a lookup that arrives in that window gets the answer of the dial
+// instead of an error. It returns at once when the first dial has ended, or when Run does not run. The wait ends
+// with ctx.
+func (c *connection) await(ctx context.Context) error {
+	select {
+	case <-c.first:
+		return nil
+	default:
+	}
+
+	if !c.owner.running.Load() {
+		return nil
+	}
+
+	select {
+	case <-c.first:
+	case <-c.owner.stopped:
+	case <-ctx.Done():
+		return fmt.Errorf("%w: waiting for the first connection: %w", ErrNotConnected, context.Cause(ctx))
+	}
+
+	return nil
+}
+
+func (l *lazyBinding) get(ctx context.Context) (*flagruntime.Binding, error) {
 	if b := l.inner.Load(); b != nil {
 		return b, nil
 	}
 
 	box := l.conn.handle.Load()
+	if box == nil {
+		err := l.conn.await(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		box = l.conn.handle.Load()
+	}
+
 	if box == nil {
 		return nil, ErrNotConnected
 	}

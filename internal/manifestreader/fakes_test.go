@@ -234,6 +234,18 @@ type rig struct {
 	once   sync.Once
 	// revision is the revision of the last snapshot taken.
 	revision uint64
+	// bound is how long a round may take before the test fails; zero means [wait]. It is a failure bound, never a pause:
+	// a round of the largest manifest under the race detector on a busy machine needs more than the usual one.
+	bound time.Duration
+}
+
+// limit returns the failure bound of a round.
+func (r *rig) limit() time.Duration {
+	if r.bound > 0 {
+		return r.bound
+	}
+
+	return wait
 }
 
 // startRig runs the reader with the jitter off and waits for its first round to end.
@@ -244,6 +256,21 @@ func startRig(tb testing.TB, store *fakeStore, cfg *manifestreader.Config, opts 
 	own.DisableJitter = true
 
 	rdr := launchRig(tb, store, &own, opts...)
+	rdr.settle()
+
+	return rdr
+}
+
+// startBoundedRig is startRig for a manifest whose rounds take longer than usual: every wait of the rig, the first
+// round included, fails only after bound.
+func startBoundedRig(tb testing.TB, store *fakeStore, cfg *manifestreader.Config, bound time.Duration) *rig {
+	tb.Helper()
+
+	own := *cfg
+	own.DisableJitter = true
+
+	rdr := launchRig(tb, store, &own)
+	rdr.bound = bound
 	rdr.settle()
 
 	return rdr
@@ -300,7 +327,7 @@ func (r *rig) settle() {
 
 	select {
 	case <-r.sched.entered:
-	case <-time.After(wait):
+	case <-time.After(r.limit()):
 		require.FailNow(r.t, "the reader did not end its round")
 	}
 }
@@ -315,7 +342,7 @@ func (r *rig) round() []call {
 
 	select {
 	case r.sched.release <- struct{}{}:
-	case <-time.After(wait):
+	case <-time.After(r.limit()):
 		require.FailNow(r.t, "the reader is not waiting for a tick")
 	}
 

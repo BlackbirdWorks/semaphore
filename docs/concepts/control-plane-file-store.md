@@ -23,7 +23,7 @@ root/
   objects/sha256/ab/ab12....json
 ```
 
-The publisher writes the objects first and the manifest last, as for S3. Write each file atomically (write a
+`semaphore-cli publish` writes a file store (see [publish](../tooling/publish.md#file-store)): the objects first and the manifest last, as for S3. A publisher of your own writes each file atomically (write a
 temporary file in the same directory, then rename it over the final name). The reader survives a non-atomic writer
 (see [Partial writes](#partial-writes)), but an atomic one costs nothing.
 

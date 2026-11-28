@@ -55,4 +55,4 @@ curl -s http://localhost:1031/ofrep/v1/evaluate/flags/flag-only-for-admin -X POS
   --data-raw '{"context": {"targetingKey": "user-123", "admin": true}}'
 ```
 
-Publish your own flags with `semaphore-cli publish` to an S3 bucket, see [Getting started](relay-proxy/getting-started.md).
+Publish your own flags with `semaphore-cli publish` to an S3 bucket or a directory, see [Getting started](relay-proxy/getting-started.md) (or [without an emulator](relay-proxy/getting-started-file-store.md)).

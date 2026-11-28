@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"strings"
@@ -128,11 +129,11 @@ func readFile(t *testing.T) func(string) ([]byte, error) {
 	}
 }
 
-func parseDoc(t *testing.T) *bootstrap.Config {
-	t.Helper()
+func parseDoc(tb testing.TB) *bootstrap.Config {
+	tb.Helper()
 
 	cfg, err := bootstrap.Parse([]byte(fileDoc), nil, bootstrap.LoadOptions{LookupEnv: secretEnv})
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	return cfg
 }
@@ -763,4 +764,245 @@ func TestConnectionsRedisProbe(t *testing.T) {
 	cancel()
 	<-done
 	require.NoError(t, conns.Shutdown(t.Context()))
+}
+
+// gatedDial is a dialer that blocks on a channel: every call announces itself on entered, then waits for the test to
+// give it its answer on release.
+type gatedDial struct {
+	entered chan struct{}
+	release chan error
+	handle  *fakeHandle
+	dial    segmentstore.Dialer
+}
+
+func newGatedDial() *gatedDial {
+	gated := &gatedDial{
+		entered: make(chan struct{}, 8), release: make(chan error, 8),
+		handle: &fakeHandle{source: segment.NewMemorySource(map[string][]string{segAudience: {memberAlice}})},
+	}
+
+	gated.dial = func(ctx context.Context) (segmentstore.Handle, error) {
+		gated.entered <- struct{}{}
+
+		select {
+		case err := <-gated.release:
+			if err != nil {
+				return nil, err
+			}
+
+			return gated.handle, nil
+		case <-ctx.Done():
+			return nil, fmt.Errorf("gated dial: %w", ctx.Err())
+		}
+	}
+
+	return gated
+}
+
+// runGated starts the loop with a gated dialer for the connection and binds a generation to it.
+func runGated(t *testing.T, gated *gatedDial) *flagruntime.Binding {
+	t.Helper()
+
+	// a probe connection shows that the loop runs: it is dialled by the first pass
+	probed := make(chan struct{}, 1)
+
+	conns := segmentstore.NewConnections(parseDoc(t), segmentstore.Options{
+		RetryInterval: tick,
+		Dialers: map[string]segmentstore.Dialer{
+			connCache: gated.dial,
+			connFast: func(context.Context) (segmentstore.Handle, error) {
+				select {
+				case probed <- struct{}{}:
+				default:
+				}
+
+				return nil, errDial
+			},
+		},
+	})
+
+	_, err := conns.Bind(connFast, segment.MissingNotMember, nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		conns.Run(ctx)
+	}()
+
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	// the loop runs before the generation binds, as in the relay
+	awaitSignal(t, probed)
+
+	binding, err := conns.Bind(connCache, segment.MissingNotMember, []flagruntime.BoundDefinition{{Name: segAudience}})
+	require.NoError(t, err)
+
+	return binding
+}
+
+type lookupResult struct {
+	err   error
+	state segment.State
+}
+
+// lookupAsync runs one lookup and reports its result.
+func lookupAsync(ctx context.Context, binding *flagruntime.Binding) <-chan lookupResult {
+	out := make(chan lookupResult, 1)
+
+	go func() {
+		lookups := []segment.Lookup{{Segment: segAudience, ID: memberAlice}}
+		err := binding.Provider.Contains(ctx, lookups)
+
+		out <- lookupResult{err: err, state: lookups[0].State}
+	}()
+
+	return out
+}
+
+func awaitSignal(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
+
+	select {
+	case <-ch:
+	case <-time.After(waitFor):
+		require.FailNow(t, "the signal did not arrive")
+	}
+}
+
+func awaitLookup(t *testing.T, ch <-chan lookupResult) lookupResult {
+	t.Helper()
+
+	select {
+	case got := <-ch:
+		return got
+	case <-time.After(waitFor):
+		require.FailNow(t, "the lookup did not end")
+	}
+
+	return lookupResult{}
+}
+
+// A lookup that arrives while the first dial of its connection is under way waits for the dial, and gets the answer of
+// the store, not an error.
+func TestLookupDuringTheFirstDialWaitsForIt(t *testing.T) {
+	t.Parallel()
+
+	gated := newGatedDial()
+	binding := runGated(t, gated)
+
+	awaitSignal(t, gated.entered)
+
+	result := lookupAsync(t.Context(), binding)
+
+	gated.release <- nil
+
+	got := awaitLookup(t, result)
+	require.NoError(t, got.err)
+	assert.Equal(t, segment.Member, got.state)
+}
+
+// When the first dial fails, the lookup that waited gets the store error: not connected.
+func TestLookupDuringTheFirstDialGetsTheStoreErrorWhenItFails(t *testing.T) {
+	t.Parallel()
+
+	gated := newGatedDial()
+	binding := runGated(t, gated)
+
+	awaitSignal(t, gated.entered)
+
+	result := lookupAsync(t.Context(), binding)
+
+	gated.release <- errDial
+
+	got := awaitLookup(t, result)
+	require.ErrorIs(t, got.err, segmentstore.ErrNotConnected)
+	assert.Equal(t, segment.Unknown, got.state)
+}
+
+// A caller whose context ends while it waits leaves at once, with the cause of the context.
+func TestLookupLeavesWhenItsContextEndsDuringTheFirstDial(t *testing.T) {
+	t.Parallel()
+
+	gated := newGatedDial()
+	binding := runGated(t, gated)
+
+	awaitSignal(t, gated.entered)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	result := lookupAsync(ctx, binding)
+
+	cancel()
+
+	got := awaitLookup(t, result)
+	require.ErrorIs(t, got.err, context.Canceled)
+	require.ErrorIs(t, got.err, segmentstore.ErrNotConnected)
+}
+
+// After the first outcome nobody waits: a dial that failed once and is being tried again does not hold the lookups.
+func TestLookupsDoNotWaitAfterTheFirstDialEnded(t *testing.T) {
+	t.Parallel()
+
+	gated := newGatedDial()
+	binding := runGated(t, gated)
+
+	awaitSignal(t, gated.entered)
+
+	gated.release <- errDial
+
+	// the retry is under way and blocked: the lookup answers at once
+	awaitSignal(t, gated.entered)
+
+	got := awaitLookup(t, lookupAsync(t.Context(), binding))
+	require.ErrorIs(t, got.err, segmentstore.ErrNotConnected)
+
+	gated.release <- nil
+
+	require.Eventually(t, func() bool {
+		return (<-lookupAsync(t.Context(), binding)).err == nil
+	}, waitFor, tick, "the retry connects")
+}
+
+// BenchmarkLookupOnAConnectedStore pins the connected path: a bound lookup waits for nothing and allocates nothing
+// that the wait for a first dial could add.
+func BenchmarkLookupOnAConnectedStore(b *testing.B) {
+	gated := newGatedDial()
+	conns := segmentstore.NewConnections(parseDoc(b), segmentstore.Options{
+		RetryInterval: tick, Dialers: map[string]segmentstore.Dialer{connCache: gated.dial},
+	})
+
+	ctx, cancel := context.WithCancel(b.Context())
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		conns.Run(ctx)
+	}()
+
+	b.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	binding, err := conns.Bind(connCache, segment.MissingNotMember, []flagruntime.BoundDefinition{{Name: segAudience}})
+	require.NoError(b, err)
+
+	gated.release <- nil
+
+	require.Eventually(b, func() bool { return stateOf(conns, connCache) == stateConnected }, waitFor, tick)
+
+	lookups := []segment.Lookup{{Segment: segAudience, ID: memberAlice}}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		_ = binding.Provider.Contains(ctx, lookups)
+	}
 }

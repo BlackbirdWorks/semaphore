@@ -9,6 +9,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
+	"github.com/blackbirdworks/semaphore/controlplane/filepublish"
 	"github.com/blackbirdworks/semaphore/controlplane/s3publish"
 	"github.com/blackbirdworks/semaphore/internal/connection"
 	"github.com/blackbirdworks/semaphore/modules/core/clock"
@@ -23,11 +24,14 @@ type Deps struct {
 	ReadFile func(string) ([]byte, error)
 	// OpenDir opens the source directory.
 	OpenDir func(dir string) fs.FS
-	// NewAPI builds the S3 client of the target. Nil means the connection factory of the relay, which honours
-	// ConnectionOptions.
+	// NewAPI builds the API of the target (the spec is nil for a file store). Nil means the connection factory of the
+	// relay for S3 (it honours ConnectionOptions) and a [filepublish.Store] for a file store.
 	NewAPI func(ctx context.Context, spec *connection.S3Spec, name string) (s3publish.API, error)
 	// Now stamps createdAt of the manifest.
 	Now func() time.Time
+	// FileOptions returns the options of the file store of a file target, applied after the options of the command (a
+	// test drives the lock wait with a timer of its own). Nil means none.
+	FileOptions func() []filepublish.Option
 	// ConnectionOptions are passed to the connection factory (a round tripper that counts requests, for example).
 	ConnectionOptions []connection.Option
 }

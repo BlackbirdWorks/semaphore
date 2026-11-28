@@ -21,8 +21,8 @@ const (
 var (
 	// ErrNoControlPlane is returned when the bootstrap file has no controlPlane section.
 	ErrNoControlPlane = errors.New("the bootstrap file has no controlPlane section")
-	// ErrNotS3 is returned when the control-plane connection is not an S3 connection.
-	ErrNotS3 = errors.New("the controlPlane connection is not an s3 connection")
+	// ErrNotS3 is returned when the control-plane connection is neither an S3 nor a file connection.
+	ErrNotS3 = errors.New("the controlPlane connection is neither an s3 nor a file connection")
 )
 
 // targetFlags are the flags that say where to publish.
@@ -56,6 +56,8 @@ func (flags *targetFlags) explicit() []string {
 // target is where to publish and how to reach it.
 type target struct {
 	spec *connection.S3Spec
+	// root is the directory of a file store; empty for S3.
+	root string
 	name string
 	cfg  s3publish.Config
 }
@@ -123,6 +125,10 @@ func targetFromConfig(flags *targetFlags, deps *Deps) (*target, error) {
 	}
 
 	conn := cfg.Connections[plane.Connection]
+	if conn.File != nil {
+		return fileTarget(flags, plane, conn.File), nil
+	}
+
 	if conn.S3 == nil {
 		return nil, fmt.Errorf("%s: connection %q: %w", flags.config, plane.Connection, ErrNotS3)
 	}
@@ -141,6 +147,19 @@ func targetFromConfig(flags *targetFlags, deps *Deps) (*target, error) {
 	}
 
 	return &target{spec: spec, name: plane.Connection, cfg: out}, nil
+}
+
+// fileTarget is the target of a file connection: the root directory stands for the bucket.
+func fileTarget(flags *targetFlags, plane *bootstrap.ControlPlane, conn *bootstrap.FileConnection) *target {
+	out := s3publish.Config{
+		Bucket: conn.Path, Prefix: flags.prefix, Channel: plane.Manifest.Channel, Connection: plane.Connection,
+		ManifestKey: plane.Manifest.Key,
+	}
+	if plane.Manifest.MaxObjects != nil {
+		out.MaxObjects = *plane.Manifest.MaxObjects
+	}
+
+	return &target{root: conn.Path, name: plane.Connection, cfg: out}
 }
 
 func orDefault(v, def string) string {

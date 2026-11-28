@@ -164,6 +164,7 @@ export default withMermaid({
         items: [
           { text: 'Documentation Index', link: '/overview' },
           { text: 'Quick Start', link: '/relay-proxy/getting-started' },
+          { text: 'Quick Start (file store)', link: '/relay-proxy/getting-started-file-store' },
           { text: 'Installation', link: '/relay-proxy/install' },
           { text: 'Architecture', link: '/concepts/architecture' },
         ],
