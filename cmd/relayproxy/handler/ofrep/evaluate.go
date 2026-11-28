@@ -3,6 +3,7 @@ package ofrep
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -69,7 +70,7 @@ func (h *EvaluateCtrl) Evaluate(w http.ResponseWriter, r *http.Request) error {
 
 	reqBody := new(model.OFREPEvalFlagRequest)
 
-	err := helper.BindBody(r, reqBody)
+	err := bindBody(w, r, reqBody)
 	if err != nil {
 		return writeJSON(
 			w,
@@ -98,7 +99,7 @@ func (h *EvaluateCtrl) Evaluate(w http.ResponseWriter, r *http.Request) error {
 
 	flagset, httpErr := helper.RequestFlagSet(ctx, h.flagsetManager, helper.APIKey(r))
 	if httpErr != nil {
-		return fmt.Errorf("getting the flag set of the evaluation: %w", httpErr)
+		return fmt.Errorf("getting the flag set of the evaluation: %w", flagSetError(httpErr))
 	}
 
 	// we set a nil value to the default value to avoid the default value to be used.
@@ -163,7 +164,7 @@ func (h *EvaluateCtrl) Evaluate(w http.ResponseWriter, r *http.Request) error {
 func (h *EvaluateCtrl) BulkEvaluate(w http.ResponseWriter, r *http.Request) error {
 	request := new(model.OFREPEvalFlagRequest)
 
-	err := helper.BindBody(r, request)
+	err := bindBody(w, r, request)
 	if err != nil {
 		return writeJSON(w, http.StatusBadRequest, NewOFREPCommonError("INVALID_CONTEXT", err.Error()))
 	}
@@ -190,7 +191,7 @@ func (h *EvaluateCtrl) BulkEvaluate(w http.ResponseWriter, r *http.Request) erro
 
 	flagset, httpErr := helper.RequestFlagSet(ctx, h.flagsetManager, helper.APIKey(r))
 	if httpErr != nil {
-		return fmt.Errorf("getting the flag set of the bulk evaluation: %w", httpErr)
+		return fmt.Errorf("getting the flag set of the bulk evaluation: %w", flagSetError(httpErr))
 	}
 
 	var allFlagsResp flagstate.AllFlags
@@ -331,6 +332,48 @@ func (h *EvaluateCtrl) countEvaluation(ctx context.Context, flagKey string, code
 	} else {
 		h.metrics.IncFlagEvaluation(flagKey)
 	}
+}
+
+// MaxBodyBytes is the size of the largest request body of an evaluation. An evaluation context is a few hundred
+// bytes, a bulk request with a list of flag keys a few kilobytes.
+const MaxBodyBytes = 1 << 20
+
+// ErrBodyTooLarge is the error of a request body larger than MaxBodyBytes.
+var ErrBodyTooLarge = errors.New("the request body is too large")
+
+// bindBody decodes the JSON body of the request. A body that is larger than MaxBodyBytes is refused before it is
+// read when its length is known, and while it is read when it is not (no allocation on the way).
+func bindBody(w http.ResponseWriter, r *http.Request, target any) error {
+	if r.ContentLength > MaxBodyBytes {
+		return fmt.Errorf("%w: %d bytes, the limit is %d", ErrBodyTooLarge, r.ContentLength, MaxBodyBytes)
+	}
+
+	if r.ContentLength < 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
+	}
+
+	err := helper.BindBody(r, target)
+	if err != nil {
+		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
+			return fmt.Errorf("%w: the limit is %d", ErrBodyTooLarge, MaxBodyBytes)
+		}
+
+		return fmt.Errorf("%w", err)
+	}
+
+	return nil
+}
+
+// flagSetError turns the failure to find the flag set of a request into the error to send. A key that
+// authenticated and is an admin key may not evaluate flags: the client is forbidden to. Every other failure keeps
+// its own status.
+func flagSetError(err *helper.HTTPError) error {
+	if errors.Is(err, service.ErrAdminKey) {
+		return fmt.Errorf("refusing the key: %w", helper.NewHTTPError(http.StatusForbidden,
+			"the API key does not give access to a flag set"))
+	}
+
+	return err
 }
 
 // writeJSON sends v as the JSON body of the response, with the status code.

@@ -55,6 +55,20 @@ type PublicScope interface {
 	DropNotPublic(count int)
 }
 
+// ErrAdminKey is what an error of [FlagSetResolver.FlagSet] wraps (errors.Is) when the key is an admin key: it
+// authenticates, and it is linked to no flag set.
+var ErrAdminKey = errors.New("the key is an admin key")
+
+type adminKeyError struct{ msg string }
+
+func (e *adminKeyError) Error() string { return e.msg }
+
+func (*adminKeyError) Unwrap() error { return ErrAdminKey }
+
+// NewAdminKeyError returns the error of a resolver for an admin key, with the message of the answer: it wraps
+// [ErrAdminKey].
+func NewAdminKeyError(msg string) error { return &adminKeyError{msg: msg} }
+
 // FlagSetResolver finds the flag set of an API key. It is the seam of the HTTP layer: the config v2 core implements
 // it, the tests of the handlers implement it on engine clients.
 type FlagSetResolver interface {

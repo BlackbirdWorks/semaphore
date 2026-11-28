@@ -18,6 +18,7 @@ import (
 // body sent for it is {"message": ...}, plus {"error": ...} when the relay proxy runs with the debug level.
 type HTTPError struct {
 	err     error
+	cause   error
 	Message string
 	Code    int
 }
@@ -31,6 +32,14 @@ func NewHTTPError(code int, message string) *HTTPError {
 // wrapped error (exposed in the body at the debug level only).
 func WrapHTTPError(code int, err error) *HTTPError {
 	return &HTTPError{Code: code, Message: http.StatusText(code), err: err}
+}
+
+// WithCause records the error that made the response, for [errors.Is] and [errors.As]: unlike the wrapped error of
+// [WrapHTTPError], it is never sent in the body.
+func (e *HTTPError) WithCause(cause error) *HTTPError {
+	e.cause = cause
+
+	return e
 }
 
 // StatusCode returns the status code of the response.
@@ -48,7 +57,13 @@ func (*HTTPError) Schema(r huma.Registry) *huma.Schema {
 }
 
 // Unwrap returns the wrapped error.
-func (e *HTTPError) Unwrap() error { return e.err }
+func (e *HTTPError) Unwrap() error {
+	if e.err != nil {
+		return e.err
+	}
+
+	return e.cause
+}
 
 // Error implements the error interface.
 func (e *HTTPError) Error() string {

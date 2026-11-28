@@ -1,5 +1,5 @@
-status: 400
+status: 403
 Content-Type: application/json
 Vary: Origin
 
-{"message":"error while getting flagset: flagset not found for API key"}
+{"message":"the API key does not give access to a flag set"}

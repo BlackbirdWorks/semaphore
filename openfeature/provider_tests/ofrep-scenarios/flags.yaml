@@ -1,0 +1,101 @@
+# Fixture flags of the OFREP scenarios (scenarios.json). Language neutral: every suite that checks the
+# relay against these scenarios serves this file as the only flag source.
+static_boolean:
+  variations: {on: true, off: false}
+  defaultRule: {variation: on}
+static_string:
+  variations: {hello: "hello", bye: "bye"}
+  defaultRule: {variation: hello}
+static_integer:
+  variations: {seven: 7, nine: 9}
+  defaultRule: {variation: seven}
+static_float:
+  variations: {pi: 3.25, e: 2.5}
+  defaultRule: {variation: pi}
+static_object:
+  variations:
+    config: {name: "semaphore", retries: 3, nested: {on: true}}
+    other: {name: "other"}
+  defaultRule: {variation: config}
+static_array:
+  variations:
+    list: ["a", "b"]
+    empty: []
+  defaultRule: {variation: list}
+static_empty_array:
+  variations:
+    empty: []
+  defaultRule: {variation: empty}
+targeted_string:
+  variations: {pro: "pro-plan", free: "free-plan"}
+  targeting:
+    - name: pro-users
+      query: plan eq "pro"
+      variation: pro
+  defaultRule: {variation: free}
+attr_number:
+  variations: {match: "matched", miss: "missed"}
+  targeting:
+    - name: rule
+      query: age gt 30
+      variation: match
+  defaultRule: {variation: miss}
+attr_boolean:
+  variations: {match: "matched", miss: "missed"}
+  targeting:
+    - name: rule
+      query: beta eq true
+      variation: match
+  defaultRule: {variation: miss}
+attr_string:
+  variations: {match: "matched", miss: "missed"}
+  targeting:
+    - name: rule
+      query: country eq "CA"
+      variation: match
+  defaultRule: {variation: miss}
+attr_nested:
+  variations: {match: "matched", miss: "missed"}
+  targeting:
+    - name: rule
+      query: user.plan eq "pro"
+      variation: match
+  defaultRule: {variation: miss}
+attr_datetime:
+  variations: {match: "matched", miss: "missed"}
+  targeting:
+    - name: rule
+      query: signup gt "2024-01-01T00:00:00Z"
+      variation: match
+  defaultRule: {variation: miss}
+rollout_boolean:
+  variations: {on: true, off: false}
+  defaultRule:
+    percentage: {on: 50, off: 50}
+targeted_rollout:
+  variations: {a: "a", b: "b", fallback: "fallback"}
+  targeting:
+    - name: vip-split
+      query: tier eq "vip"
+      percentage: {a: 50, b: 50}
+  defaultRule: {variation: fallback}
+disabled_string:
+  variations: {hello: "hello"}
+  defaultRule: {variation: hello}
+  disable: true
+scheduled_over:
+  variations: {old: "old", new: "new"}
+  defaultRule: {variation: old}
+  scheduledRollout:
+    - date: 2020-04-10T00:00:00Z
+      defaultRule: {variation: new}
+progressive_over:
+  variations: {before: "before", after: "after"}
+  defaultRule:
+    progressiveRollout:
+      initial: {variation: before, date: 2020-01-01T00:00:00Z}
+      end: {variation: after, date: 2020-01-05T00:00:00Z}
+metadata_flag:
+  variations: {on: true}
+  defaultRule: {variation: on}
+  metadata: {team: "payments", revision: 3, experimental: false}

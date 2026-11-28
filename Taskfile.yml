@@ -305,6 +305,11 @@ tasks:
     cmds:
       - 'FUZZTIME="{{.FUZZTIME}}" GOWORK_ENV="{{if eq (env "CI") "true"}}GOWORK=off{{end}}" GOCMD="{{.GOCMD}}" .github/ci-scripts/fuzz.sh --dir "{{.MODULE}}" "{{.DIR}}"'
 
+  ofrep-conformance:
+    desc: Run the OFREP conformance suite (real relays, every response checked against the pinned OFREP document; no docker)
+    cmds:
+      - CGO_ENABLED=1 GOWORK="{{.GOWORK_VAL}}" {{.GOCMD}} test -race -count=1 -v ./openfeature/provider_tests/ofrep-conformance/
+
   provider-tests:
     desc: Run the integration tests for the OpenFeature Providers
     cmds:

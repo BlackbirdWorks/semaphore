@@ -1,0 +1,718 @@
+{
+ "description": "Language neutral scenarios of the OFREP behaviour of the relay: serve flags.yaml, send the context to the evaluation of the flag and to the bulk evaluation, expect these results. body: fields of the response that must equal; absent: fields that must not be there; metadata: entries the metadata must contain; bulk: same (the bulk item has the same fields), error (the item has the errorCode and no value), omitted (no item). source: where the expectation comes from: spec (the pinned document or the OFREP text), provider (an official provider relies on it), relay (engine behaviour that neither defines); basis says why.",
+ "scenarios": [
+  {
+   "name": "static boolean",
+   "flag": "static_boolean",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "static_boolean",
+    "value": true,
+    "variant": "on",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "spec",
+   "basis": "evaluationSuccess: key, value of a typed flag, variant, reason STATIC; context needs no targetingKey"
+  },
+  {
+   "name": "static string",
+   "flag": "static_string",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "static_string",
+    "value": "hello",
+    "variant": "hello",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "spec",
+   "basis": "evaluationSuccess: key, value of a typed flag, variant, reason STATIC; context needs no targetingKey"
+  },
+  {
+   "name": "static integer",
+   "flag": "static_integer",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "static_integer",
+    "value": 7,
+    "variant": "seven",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "spec",
+   "basis": "evaluationSuccess: key, value of a typed flag, variant, reason STATIC; context needs no targetingKey"
+  },
+  {
+   "name": "static float",
+   "flag": "static_float",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "static_float",
+    "value": 3.25,
+    "variant": "pi",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "spec",
+   "basis": "evaluationSuccess: key, value of a typed flag, variant, reason STATIC; context needs no targetingKey"
+  },
+  {
+   "name": "static object",
+   "flag": "static_object",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "static_object",
+    "value": {
+     "name": "semaphore",
+     "retries": 3,
+     "nested": {
+      "on": true
+     }
+    },
+    "variant": "config",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "spec",
+   "basis": "evaluationSuccess: key, value of a typed flag, variant, reason STATIC; context needs no targetingKey"
+  },
+  {
+   "name": "static array",
+   "flag": "static_array",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "static_array",
+    "value": [
+     "a",
+     "b"
+    ],
+    "variant": "list",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "provider",
+   "basis": "every official OFREP provider takes a JSON array as an object value; the pinned document types it as object (see the deviation in the validator)"
+  },
+  {
+   "name": "static empty array",
+   "flag": "static_empty_array",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "static_empty_array",
+    "value": [],
+    "variant": "empty",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "provider",
+   "basis": "every official OFREP provider takes a JSON array as an object value; the pinned document types it as object (see the deviation in the validator)"
+  },
+  {
+   "name": "static flag with an empty context",
+   "flag": "static_boolean",
+   "context": {},
+   "status": 200,
+   "body": {
+    "key": "static_boolean",
+    "value": true,
+    "variant": "on",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "spec",
+   "basis": "evaluationSuccess: key, value of a typed flag, variant, reason STATIC; context needs no targetingKey"
+  },
+  {
+   "name": "targeting rule match",
+   "flag": "targeted_string",
+   "context": {
+    "targetingKey": "u",
+    "plan": "pro"
+   },
+   "status": 200,
+   "body": {
+    "key": "targeted_string",
+    "value": "pro-plan",
+    "variant": "pro",
+    "reason": "TARGETING_MATCH"
+   },
+   "bulk": "same",
+   "source": "spec",
+   "basis": "reason TARGETING_MATCH is in the reason enum"
+  },
+  {
+   "name": "targeting rule miss falls to the default rule",
+   "flag": "targeted_string",
+   "context": {
+    "targetingKey": "u",
+    "plan": "free"
+   },
+   "status": 200,
+   "body": {
+    "key": "targeted_string",
+    "value": "free-plan",
+    "variant": "free",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "the engine reason of a default rule is DEFAULT, mapped to STATIC because DEFAULT is not in the pinned reason enum"
+  },
+  {
+   "name": "targeting without the attribute",
+   "flag": "targeted_string",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "targeted_string",
+    "value": "free-plan",
+    "variant": "free",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "the engine reason of a default rule is DEFAULT, mapped to STATIC because DEFAULT is not in the pinned reason enum"
+  },
+  {
+   "name": "percentage rollout, first key",
+   "flag": "rollout_boolean",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "rollout_boolean",
+    "value": false,
+    "variant": "off",
+    "reason": "SPLIT"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "reason SPLIT is in the enum; which variant a key gets is the hashing of the engine"
+  },
+  {
+   "name": "percentage rollout, same key again",
+   "flag": "rollout_boolean",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "rollout_boolean",
+    "value": false,
+    "variant": "off",
+    "reason": "SPLIT"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "reason SPLIT is in the enum; which variant a key gets is the hashing of the engine"
+  },
+  {
+   "name": "percentage rollout, other key",
+   "flag": "rollout_boolean",
+   "context": {
+    "targetingKey": "user-2"
+   },
+   "status": 200,
+   "body": {
+    "key": "rollout_boolean",
+    "value": true,
+    "variant": "on",
+    "reason": "SPLIT"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "reason SPLIT is in the enum; which variant a key gets is the hashing of the engine"
+  },
+  {
+   "name": "rule with a percentage, rule matches",
+   "flag": "targeted_rollout",
+   "context": {
+    "targetingKey": "user-1",
+    "tier": "vip"
+   },
+   "status": 200,
+   "body": {
+    "key": "targeted_rollout",
+    "value": "a",
+    "variant": "a",
+    "reason": "SPLIT"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "reason SPLIT is in the enum; which variant a key gets is the hashing of the engine"
+  },
+  {
+   "name": "rule with a percentage, rule matches, other key",
+   "flag": "targeted_rollout",
+   "context": {
+    "targetingKey": "user-3",
+    "tier": "vip"
+   },
+   "status": 200,
+   "body": {
+    "key": "targeted_rollout",
+    "value": "b",
+    "variant": "b",
+    "reason": "SPLIT"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "reason SPLIT is in the enum; which variant a key gets is the hashing of the engine"
+  },
+  {
+   "name": "rule with a percentage, rule misses",
+   "flag": "targeted_rollout",
+   "context": {
+    "targetingKey": "user-1",
+    "tier": "std"
+   },
+   "status": 200,
+   "body": {
+    "key": "targeted_rollout",
+    "value": "fallback",
+    "variant": "fallback",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "reason SPLIT is in the enum; which variant a key gets is the hashing of the engine"
+  },
+  {
+   "name": "disabled flag",
+   "flag": "disabled_string",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "disabled_string",
+    "reason": "DISABLED"
+   },
+   "bulk": "same",
+   "absent": [
+    "value"
+   ],
+   "source": "spec",
+   "basis": "reason DISABLED, and the value is absent as for codeDefaultFlag"
+  },
+  {
+   "name": "scheduled rollout that is over",
+   "flag": "scheduled_over",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "scheduled_over",
+    "value": "new",
+    "variant": "new",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "scheduled rollouts are an engine feature; the reason after the last step is the engine's STATIC"
+  },
+  {
+   "name": "progressive rollout that is over",
+   "flag": "progressive_over",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "progressive_over",
+    "value": "after",
+    "variant": "after",
+    "reason": "SPLIT"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "progressive rollouts are an engine feature; after the end date the end variation is a 100% split"
+  },
+  {
+   "name": "flag metadata",
+   "flag": "metadata_flag",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "metadata_flag",
+    "value": true,
+    "variant": "on",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "metadata": {
+    "team": "payments",
+    "revision": 3,
+    "experimental": false
+   },
+   "source": "spec",
+   "basis": "metadata is an object of boolean, string and number values"
+  },
+  {
+   "name": "flag not found",
+   "flag": "no_such_flag",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 404,
+   "body": {
+    "key": "no_such_flag",
+    "errorCode": "FLAG_NOT_FOUND"
+   },
+   "absent": [
+    "value",
+    "reason"
+   ],
+   "bulk": "omitted",
+   "source": "spec",
+   "basis": "404 with flagNotFound: key and errorCode FLAG_NOT_FOUND; JavaScript ofrep-core maps the failure body by errorCode"
+  },
+  {
+   "name": "rollout without a targeting key",
+   "flag": "rollout_boolean",
+   "context": {},
+   "status": 400,
+   "body": {
+    "key": "rollout_boolean",
+    "errorCode": "TARGETING_KEY_MISSING"
+   },
+   "absent": [
+    "value",
+    "reason"
+   ],
+   "bulk": "error",
+   "source": "spec",
+   "basis": "400 with evaluationFailure: errorCode TARGETING_KEY_MISSING is in the errorCode enum"
+  },
+  {
+   "name": "rollout with an empty targeting key",
+   "flag": "rollout_boolean",
+   "context": {
+    "targetingKey": ""
+   },
+   "status": 400,
+   "body": {
+    "key": "rollout_boolean",
+    "errorCode": "TARGETING_KEY_MISSING"
+   },
+   "absent": [
+    "value",
+    "reason"
+   ],
+   "bulk": "error",
+   "source": "spec",
+   "basis": "400 with evaluationFailure: errorCode TARGETING_KEY_MISSING is in the errorCode enum"
+  },
+  {
+   "name": "rollout with a targeting key that is a number",
+   "flag": "rollout_boolean",
+   "context": {
+    "targetingKey": 42
+   },
+   "status": 400,
+   "body": {
+    "key": "rollout_boolean",
+    "errorCode": "TARGETING_KEY_MISSING"
+   },
+   "absent": [
+    "value",
+    "reason"
+   ],
+   "bulk": "error",
+   "source": "relay",
+   "basis": "the context schema types targetingKey as a string; how a wrong type is answered is the relay's choice"
+  },
+  {
+   "name": "targeting on a number attribute, match",
+   "flag": "attr_number",
+   "context": {
+    "targetingKey": "u",
+    "extra": {
+     "ignored": [
+      1,
+      {
+       "a": null
+      }
+     ]
+    },
+    "age": 31
+   },
+   "status": 200,
+   "body": {
+    "key": "attr_number",
+    "value": "matched",
+    "variant": "match",
+    "reason": "TARGETING_MATCH"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "how a query reads an attribute type is engine behaviour that the protocol does not define (the reason is the spec's)"
+  },
+  {
+   "name": "targeting on a number attribute, miss",
+   "flag": "attr_number",
+   "context": {
+    "targetingKey": "u",
+    "extra": {
+     "ignored": [
+      1,
+      {
+       "a": null
+      }
+     ]
+    },
+    "age": 29
+   },
+   "status": 200,
+   "body": {
+    "key": "attr_number",
+    "value": "missed",
+    "variant": "miss",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "how a query reads an attribute type is engine behaviour that the protocol does not define (the reason is the spec's)"
+  },
+  {
+   "name": "targeting on a boolean attribute, match",
+   "flag": "attr_boolean",
+   "context": {
+    "targetingKey": "u",
+    "extra": {
+     "ignored": [
+      1,
+      {
+       "a": null
+      }
+     ]
+    },
+    "beta": true
+   },
+   "status": 200,
+   "body": {
+    "key": "attr_boolean",
+    "value": "matched",
+    "variant": "match",
+    "reason": "TARGETING_MATCH"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "how a query reads an attribute type is engine behaviour that the protocol does not define (the reason is the spec's)"
+  },
+  {
+   "name": "targeting on a boolean attribute, miss",
+   "flag": "attr_boolean",
+   "context": {
+    "targetingKey": "u",
+    "extra": {
+     "ignored": [
+      1,
+      {
+       "a": null
+      }
+     ]
+    },
+    "beta": false
+   },
+   "status": 200,
+   "body": {
+    "key": "attr_boolean",
+    "value": "missed",
+    "variant": "miss",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "how a query reads an attribute type is engine behaviour that the protocol does not define (the reason is the spec's)"
+  },
+  {
+   "name": "targeting on a string attribute, match",
+   "flag": "attr_string",
+   "context": {
+    "targetingKey": "u",
+    "extra": {
+     "ignored": [
+      1,
+      {
+       "a": null
+      }
+     ]
+    },
+    "country": "CA"
+   },
+   "status": 200,
+   "body": {
+    "key": "attr_string",
+    "value": "matched",
+    "variant": "match",
+    "reason": "TARGETING_MATCH"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "how a query reads an attribute type is engine behaviour that the protocol does not define (the reason is the spec's)"
+  },
+  {
+   "name": "targeting on a string attribute, miss",
+   "flag": "attr_string",
+   "context": {
+    "targetingKey": "u",
+    "extra": {
+     "ignored": [
+      1,
+      {
+       "a": null
+      }
+     ]
+    },
+    "country": "US"
+   },
+   "status": 200,
+   "body": {
+    "key": "attr_string",
+    "value": "missed",
+    "variant": "miss",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "how a query reads an attribute type is engine behaviour that the protocol does not define (the reason is the spec's)"
+  },
+  {
+   "name": "targeting on a nested object attribute, match",
+   "flag": "attr_nested",
+   "context": {
+    "targetingKey": "u",
+    "extra": {
+     "ignored": [
+      1,
+      {
+       "a": null
+      }
+     ]
+    },
+    "user": {
+     "plan": "pro"
+    }
+   },
+   "status": 200,
+   "body": {
+    "key": "attr_nested",
+    "value": "matched",
+    "variant": "match",
+    "reason": "TARGETING_MATCH"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "how a query reads an attribute type is engine behaviour that the protocol does not define (the reason is the spec's)"
+  },
+  {
+   "name": "targeting on a nested object attribute, miss",
+   "flag": "attr_nested",
+   "context": {
+    "targetingKey": "u",
+    "extra": {
+     "ignored": [
+      1,
+      {
+       "a": null
+      }
+     ]
+    },
+    "user": {
+     "plan": "free"
+    }
+   },
+   "status": 200,
+   "body": {
+    "key": "attr_nested",
+    "value": "missed",
+    "variant": "miss",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "how a query reads an attribute type is engine behaviour that the protocol does not define (the reason is the spec's)"
+  },
+  {
+   "name": "targeting on a date-time string attribute, match",
+   "flag": "attr_datetime",
+   "context": {
+    "targetingKey": "u",
+    "extra": {
+     "ignored": [
+      1,
+      {
+       "a": null
+      }
+     ]
+    },
+    "signup": "2025-06-01T00:00:00Z"
+   },
+   "status": 200,
+   "body": {
+    "key": "attr_datetime",
+    "value": "matched",
+    "variant": "match",
+    "reason": "TARGETING_MATCH"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "how a query reads an attribute type is engine behaviour that the protocol does not define (the reason is the spec's)"
+  },
+  {
+   "name": "targeting on a date-time string attribute, miss",
+   "flag": "attr_datetime",
+   "context": {
+    "targetingKey": "u",
+    "extra": {
+     "ignored": [
+      1,
+      {
+       "a": null
+      }
+     ]
+    },
+    "signup": "2023-06-01T00:00:00Z"
+   },
+   "status": 200,
+   "body": {
+    "key": "attr_datetime",
+    "value": "missed",
+    "variant": "miss",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "source": "relay",
+   "basis": "how a query reads an attribute type is engine behaviour that the protocol does not define (the reason is the spec's)"
+  }
+ ]
+}

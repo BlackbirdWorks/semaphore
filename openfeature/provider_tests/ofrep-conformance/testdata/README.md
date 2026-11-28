@@ -1,18 +1,19 @@
-# Vendored OFREP OpenAPI Specification
+# Pinned OFREP OpenAPI document
 
-- **File**: [`openapi.yaml`](openapi.yaml)
-- **Upstream source**: `https://github.com/open-feature/protocol/blob/98c4e0de5583c0d79dd938b82975c80125335e92/service/openapi.yaml`
-- **Version**: OpenFeature Remote Evaluation Protocol (OFREP) `0.4.0` (pinned commit `98c4e0de5583c0d79dd938b82975c80125335e92`)
+- `openapi.yaml`: the published document, byte for byte, with no local edit.
+- `openapi.pin.json`: where it comes from (repository, path, commit, version) and its SHA-256.
+- The repository publishes no git tag or release; the pin is the commit that last changed `service/openapi.yaml`
+  and that was the head of the default branch when it was pinned. `tag` is empty for that reason.
+- A test fails when `openapi.yaml` does not match the recorded hash.
 
-## Intentional Validator Rule (`validateValueOneOf`)
+To adopt a new version: download the file from the new commit, update the pin file, then add the conformance
+cases the coverage test asks for.
 
-The vendored upstream schema is kept byte-for-byte unmodified. In `evaluationSuccess.properties.value` (and `value` / branch structure across `booleanFlag`, `stringFlag`, `integerFlag`, `floatFlag`, `objectFlag`, and `codeDefaultFlag`):
+## Rules the validator adds to the document
 
-1. `codeDefaultFlag` omits `value` in its properties without an explicit `not: { required: [value] }` restriction in OpenAPI 3.1.
-2. `integerFlag` (`type: integer`) also satisfies `floatFlag` (`type: number`).
+The document leaves two things open that the validator closes with the intent of the specification
+([`validateValueOneOf`](../validator.go)):
 
-To match the OFREP specification intent (OpenFeature OFREP ADR-0006, where returning code default omits `"value"` rather than emitting `"value": null`), [`validateValueOneOf`](../validator.go) enforces:
-
-- `codeDefaultFlag` matches **only** when the `"value"` property is absent (so `"value": null` fails validation).
-- Typed flag branches match **only** when the `"value"` property is present.
-- Whole JSON numbers matching both `integerFlag` and `floatFlag` are accepted as an unambiguous numeric match.
+- `codeDefaultFlag` matches only when `value` is absent (so `"value": null` fails).
+- A typed flag matches only when `value` is present. A whole JSON number matches both `integerFlag` and `floatFlag`
+  and is accepted as an unambiguous numeric match.

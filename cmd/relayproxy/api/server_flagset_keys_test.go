@@ -48,7 +48,7 @@ func TestFlagsetMode_EvaluationKeysOutsideFlagsets(t *testing.T) {
 	t.Cleanup(sseService.Close)
 	proxyConf.flags = mock.NewNamed(t, mock.Named{
 		Name: "tenant", APIKeys: []string{flagSetKey}, Config: mock.FileConfig(fixtures.FlagConfigYAMLParentPath),
-	})
+	}).WithAdminKeys(adminKey)
 
 	srv := newTestServer(t, proxyConf, &service.Services{
 		WebsocketService: wsService,
@@ -71,9 +71,17 @@ func TestFlagsetMode_EvaluationKeysOutsideFlagsets(t *testing.T) {
 		body   string
 		// keyInQuery is true for the streaming endpoints, which read the key from the apiKey query param.
 		keyInQuery bool
+		// wantAdmin is the status for an admin key when it is not 400: OFREP documents 403 for it.
+		wantAdmin int
 	}{
-		{name: "ofrep single", method: http.MethodPost, path: ofrepEvaluateTestFlag, body: evalBody},
-		{name: "ofrep bulk", method: http.MethodPost, path: fixtures.OFREPEvaluateFlagsPath, body: evalBody},
+		{
+			name: "ofrep single", method: http.MethodPost, path: ofrepEvaluateTestFlag, body: evalBody,
+			wantAdmin: http.StatusForbidden,
+		},
+		{
+			name: "ofrep bulk", method: http.MethodPost, path: fixtures.OFREPEvaluateFlagsPath, body: evalBody,
+			wantAdmin: http.StatusForbidden,
+		},
 		{
 			name: "eval", method: http.MethodPost, path: v1FeatureTest,
 			body: `{"evaluationContext":{"key":"user-1"},"defaultValue":false}`,
@@ -97,7 +105,7 @@ func TestFlagsetMode_EvaluationKeysOutsideFlagsets(t *testing.T) {
 		skipStreams bool
 	}{
 		{name: "flag set", key: flagSetKey, want: http.StatusOK, skipStreams: true},
-		// An admin key authenticates but it is not linked to a flag set: documented 400.
+		// An admin key authenticates but it is not linked to a flag set: documented 400 (403 for OFREP, see wantAdmin).
 		{name: fixtures.UserAdmin, key: adminKey, want: http.StatusBadRequest},
 		{name: "authorizedKeys.evaluation", key: "authorized-evaluation-key", want: http.StatusUnauthorized},
 		{name: "unknown", key: "unknown-key", want: http.StatusUnauthorized},
@@ -134,7 +142,12 @@ func TestFlagsetMode_EvaluationKeysOutsideFlagsets(t *testing.T) {
 				body, requestWithContextErr := io.ReadAll(resp.Body)
 				require.NoError(t, requestWithContextErr)
 
-				assert.Equal(t, keyCase.want, resp.StatusCode, string(body))
+				want := keyCase.want
+				if keyCase.key == adminKey && endpoint.wantAdmin != 0 {
+					want = endpoint.wantAdmin
+				}
+
+				assert.Equal(t, want, resp.StatusCode, string(body))
 			})
 		}
 	}

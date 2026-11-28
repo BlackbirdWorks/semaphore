@@ -39,7 +39,40 @@ func noEnv(string) (string, bool) { return "", false }
 func startRelay(t *testing.T, bootstrapFile string) string {
 	t.Helper()
 
-	cfgPath := filepath.Join("..", bootstrapFile)
+	return startRelayAt(t, filepath.Join("..", bootstrapFile), nil)
+}
+
+// startRelayWithAdminKey starts the relay of bootstrap-authenticated.yaml with an admin key added: an admin key
+// authenticates on every endpoint and is then refused by the handlers that serve flag sets only.
+func startRelayWithAdminKey(t *testing.T, adminKey string) string {
+	t.Helper()
+
+	const fileMode = 0o600
+
+	raw, err := os.ReadFile(filepath.Join("..", "bootstrap-authenticated.yaml"))
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(t.TempDir(), "bootstrap.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, append(raw, []byte("auth:\n  adminKeys: ["+adminKey+"]\n")...), fileMode))
+
+	return startRelayAt(t, cfgPath, nil)
+}
+
+// startRelayWithEventStream starts the relay of bootstrap-authenticated.yaml that advertises a stream of flag changes.
+func startRelayWithEventStream(t *testing.T, baseURL string, inactivityDelaySec int) string {
+	t.Helper()
+
+	return startRelayAt(t, filepath.Join("..", "bootstrap-authenticated.yaml"), func(cfg *bootstrap.Config) {
+		cfg.Server.OFREPEventStream = bootstrap.OFREPEventStream{
+			BaseURL:            baseURL,
+			InactivityDelaySec: inactivityDelaySec,
+		}
+	})
+}
+
+func startRelayAt(t *testing.T, cfgPath string, mutate func(*bootstrap.Config)) string {
+	t.Helper()
+
 	load := bootstrap.LoadOptions{ReadFile: os.ReadFile, LookupEnv: noEnv}
 
 	cfg, err := bootstrap.Load(&bootstrap.Overrides{Config: cfgPath}, load)
@@ -49,6 +82,10 @@ func startRelay(t *testing.T, bootstrapFile string) string {
 	require.NotNil(t, conn.File)
 	conn.File.Path = filepath.Join("..", "store")
 
+	if mutate != nil {
+		mutate(cfg)
+	}
+
 	return startRelayFromConfig(t, cfg, load)
 }
 
@@ -56,7 +93,15 @@ func startRelay(t *testing.T, bootstrapFile string) string {
 func startRelayWithFlags(t *testing.T, flagsYAML string) string {
 	t.Helper()
 
-	storeDir := writeTempFlagStore(t, flagsYAML)
+	return startRelayWithFlagSet(t, flagsYAML, true)
+}
+
+// startRelayWithFlagSet starts a relay proxy serving the flags; without a key it serves them to requests that
+// carry no key (a public flag set), otherwise only to the key authorized_token.
+func startRelayWithFlagSet(t *testing.T, flagsYAML string, keyed bool) string {
+	t.Helper()
+
+	storeDir := writeTempFlagStore(t, flagsYAML, keyed)
 	cfgPath := filepath.Join("..", "bootstrap.yaml")
 	load := bootstrap.LoadOptions{ReadFile: os.ReadFile, LookupEnv: noEnv}
 
@@ -70,7 +115,7 @@ func startRelayWithFlags(t *testing.T, flagsYAML string) string {
 	return startRelayFromConfig(t, cfg, load)
 }
 
-func writeTempFlagStore(t *testing.T, flagsYAML string) string {
+func writeTempFlagStore(t *testing.T, flagsYAML string, keyed bool) string {
 	t.Helper()
 
 	const (
@@ -79,8 +124,12 @@ func writeTempFlagStore(t *testing.T, flagsYAML string) string {
 	)
 
 	storeDir := t.TempDir()
+
 	flagSetsYAML := "apiVersion: semaphore/v1\nkind: FlagSet\nflagSets:\n" +
-		"  - name: integration\n    sources:\n      - integration-flags\n    apiKeys:\n      - authorized_token\n"
+		"  - name: integration\n    sources:\n      - integration-flags\n"
+	if keyed {
+		flagSetsYAML += "    apiKeys:\n      - authorized_token\n"
+	}
 
 	writeObj := func(content string) (string, string, int) {
 		sum := sha256.Sum256([]byte(content))

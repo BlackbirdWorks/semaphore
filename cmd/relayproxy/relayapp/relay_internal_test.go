@@ -493,7 +493,7 @@ func TestRunReloadsTheBootstrapFile(t *testing.T) {
 	rig := startRelay(t, &rigOptions{})
 	rig.awaitGeneration(1)
 
-	// the admin key is unknown: 401. After the reload it is known: the evaluation API answers 400 to an admin key.
+	// the admin key is unknown: 401. After the reload it is known: the evaluation API answers 403 to an admin key.
 	status, _ := rig.evaluate(adminKey)
 	assert.Equal(t, http.StatusUnauthorized, status)
 
@@ -501,10 +501,10 @@ func TestRunReloadsTheBootstrapFile(t *testing.T) {
 
 	rig.reload <- struct{}{}
 
-	// every applied round is a chance to see the reload: the answer to the admin key turns from 401 to 400
+	// every applied round is a chance to see the reload: the answer to the admin key turns from 401 to 403
 	timeout := time.After(waitBound)
 
-	for status != http.StatusBadRequest {
+	for status != http.StatusForbidden {
 		select {
 		case res := <-rig.rounds:
 			if res.Outcome == flagruntime.OutcomeApplied {
@@ -515,7 +515,7 @@ func TestRunReloadsTheBootstrapFile(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, http.StatusForbidden, status)
 }
 
 func TestRunShutsDownInOrder(t *testing.T) {
@@ -845,7 +845,7 @@ func TestReloadWithAnUnresolvedAdminKeyKeepsTheKeys(t *testing.T) {
 	rig.awaitGeneration(1)
 
 	status, _ := rig.evaluate(adminKey)
-	require.Equal(t, http.StatusBadRequest, status, "the admin key of the file is known")
+	require.Equal(t, http.StatusForbidden, status, "the admin key of the file is known")
 
 	rig.writeConfig("auth:\n  adminKeys: [" + otherAdminKey + ", {fromEnv: ADMIN_MISSING}]\n")
 
@@ -864,7 +864,7 @@ func TestReloadWithAnUnresolvedAdminKeyKeepsTheKeys(t *testing.T) {
 			assert.NotContains(t, res.Detail, otherAdminKey)
 
 			status, _ = rig.evaluate(adminKey)
-			assert.Equal(t, http.StatusBadRequest, status, "the previous admin key still works")
+			assert.Equal(t, http.StatusForbidden, status, "the previous admin key still works")
 
 			status, _ = rig.evaluate(otherAdminKey)
 			assert.Equal(t, http.StatusUnauthorized, status, "the key of the rejected file is not known")

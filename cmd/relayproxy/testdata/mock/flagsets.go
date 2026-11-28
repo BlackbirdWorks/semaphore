@@ -101,6 +101,7 @@ type Named struct {
 // finds its own.
 type FlagSets struct {
 	byKey   map[string]string
+	admin   map[string]struct{}
 	sets    map[string]*ffclient.GoFeatureFlag
 	def     *ffclient.GoFeatureFlag
 	defName string
@@ -138,6 +139,16 @@ func NewNamed(tb testing.TB, sets ...Named) *FlagSets {
 	return fs
 }
 
+// WithAdminKeys makes the keys admin keys: they resolve to no flag set, with the error of an admin key.
+func (f *FlagSets) WithAdminKeys(keys ...string) *FlagSets {
+	f.admin = make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		f.admin[key] = struct{}{}
+	}
+
+	return f
+}
+
 // FlagSet returns the flag set of the key.
 //
 //nolint:ireturn // the seam of the HTTP layer
@@ -148,6 +159,10 @@ func (f *FlagSets) FlagSet(apiKey string) (service.FlagSet, error) {
 
 	if apiKey == "" {
 		return nil, errNoAPIKey
+	}
+
+	if _, isAdmin := f.admin[apiKey]; isAdmin {
+		return nil, service.NewAdminKeyError(errFlagSetNotFound.Error())
 	}
 
 	name, found := f.byKey[apiKey]

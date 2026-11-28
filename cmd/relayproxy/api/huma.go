@@ -17,6 +17,7 @@ const (
 	securityAPIKey  = "ApiKeyAuth"  //nolint:gosec // the name of a security scheme, not a credential
 	securityXAPIKey = "XApiKeyAuth" //nolint:gosec // the name of a security scheme, not a credential
 	// securityQueryAPIKey is the scheme of the streams: they take the key in the apiKey query parameter only.
+	securityBearer      = "BearerAuth"
 	securityQueryAPIKey = "ApiKeyQueryAuth" //nolint:gosec // the name of a security scheme, not a credential
 	// schemeAPIKey is the type of the security schemes: an API key.
 	schemeAPIKey = "apiKey"
@@ -138,6 +139,10 @@ func newHumaConfig(exposeError, docs bool) huma.Config {
 			Type: schemeAPIKey, In: inQuery, Name: queryAPIKey,
 			Description: "The API key of the flag set in the apiKey query parameter, as the streams of flag changes " +
 				"take it. The URL with the key is sensitive and must not be logged.",
+		},
+		securityBearer: {
+			Type: "http", Scheme: "bearer",
+			Description: "The API key of the flag set as a bearer token: Authorization: Bearer <key>.",
 		},
 		securityXAPIKey: {
 			Type: schemeAPIKey, In: inHeader, Name: "X-API-Key",

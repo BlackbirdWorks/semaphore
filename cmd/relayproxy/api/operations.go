@@ -46,6 +46,11 @@ func securityAll() []map[string][]string {
 	return []map[string][]string{{securityAPIKey: {}}, {securityXAPIKey: {}}}
 }
 
+// securityOFREP is the security of the OFREP endpoints: the key in the X-API-Key header or as a bearer token.
+func securityOFREP() []map[string][]string {
+	return []map[string][]string{{securityXAPIKey: {}}, {securityBearer: {}}}
+}
+
 // optionalKey documents the key of an operation as optional when the middleware that guards it lets a request without
 // a key through (the public flags): the empty requirement is how OpenAPI says that the security is optional.
 // The operations that the public flags can reach are the ones registered through it, so the document follows
@@ -100,6 +105,25 @@ func jsonBody(api huma.API, description string, required bool, v any) *huma.Requ
 		Description: description,
 		Required:    required,
 		Content:     map[string]*huma.MediaType{contentJSON: {Schema: schemaOf(api, v)}},
+	}
+}
+
+// withETagHeader documents the ETag header of a response.
+func withETagHeader(resp *huma.Response) *huma.Response {
+	resp.Headers = map[string]*huma.Param{
+		"ETag": {Description: "Entity tag of the evaluation: send it back in If-None-Match.",
+			Schema: &huma.Schema{Type: typeString}},
+	}
+
+	return resp
+}
+
+// changeNotificationParam is a query parameter that a provider copies from a change notification of the stream.
+func changeNotificationParam(name string, schema *huma.Schema) *huma.Param {
+	return &huma.Param{
+		Name: name, In: inQuery, Schema: schema,
+		Description: "Metadata of the change notification that triggered this request. The relay accepts it and " +
+			"evaluates the flags as for any other request.",
 	}
 }
 
@@ -180,18 +204,21 @@ func operationFlagEval(api huma.API) *huma.Operation {
 	}
 }
 
-// operationOFREPEval documents POST /ofrep/v1/evaluate/flags/{flag_key}.
+// operationOFREPEval documents POST /ofrep/v1/evaluate/flags/{key}.
 func operationOFREPEval(api huma.API) *huma.Operation {
 	return &huma.Operation{
 		OperationID: "ofrepEvaluate",
 		Method:      http.MethodPost,
-		Path:        "/ofrep/v1/evaluate/flags/{flag_key}",
+		Path:        "/ofrep/v1/evaluate/flags/{key}",
 		Summary:     "Evaluate a feature flag using the OpenFeature Remote Evaluation Protocol",
 		Tags:        []string{tagOFREP},
-		Security:    securityAll(),
+		Security:    securityOFREP(),
 		Description: "Making a **POST** request to the URL `/ofrep/v1/evaluate/flags/{your_flag_name}` will give you the\n" +
 			"value of the flag for this evaluation context",
-		Parameters:  []*huma.Param{flagKeyParam()},
+		Parameters: []*huma.Param{{
+			Name: "key", In: "path", Required: true,
+			Description: "Name of your feature flag", Schema: &huma.Schema{Type: typeString},
+		}},
 		RequestBody: jsonBody(api, "Evaluation Context for this API call", true, model.OFREPEvalFlagRequest{}),
 		Responses: map[string]*huma.Response{
 			statusKey(http.StatusOK): jsonResponse[model.OFREPEvaluateSuccessResponse](api, "Success"),
@@ -200,6 +227,10 @@ func operationOFREPEval(api huma.API) *huma.Operation {
 				"Bad Request",
 			),
 			statusKey(http.StatusUnauthorized): errorResponse(api, "Unauthorized"),
+			statusKey(http.StatusForbidden): errorResponse(
+				api,
+				"Forbidden - The API key does not give access to a flag set (an admin key)",
+			),
 			statusKey(http.StatusNotFound): jsonResponse[model.OFREPEvaluateResponseError](
 				api,
 				"Flag Not Found",
@@ -217,18 +248,24 @@ func operationOFREPBulk(api huma.API) *huma.Operation {
 		Path:        "/ofrep/v1/evaluate/flags",
 		Summary:     "Open-Feature Remote Evaluation Protocol bulk evaluation API.",
 		Tags:        []string{tagOFREP},
-		Security:    securityAll(),
+		Security:    securityOFREP(),
 		Description: "Making a **POST** request to the URL `/ofrep/v1/evaluate/flags` will give you the value of the list\n" +
 			"of feature flags for this evaluation context.\n\n" +
 			"If no flags are provided, the API will evaluate all available flags in the configuration.",
-		Parameters: []*huma.Param{ifNoneMatch()},
+		Parameters: []*huma.Param{
+			ifNoneMatch(),
+			changeNotificationParam("flagConfigEtag", &huma.Schema{Type: typeString}),
+			changeNotificationParam("flagConfigLastModified", &huma.Schema{OneOf: []*huma.Schema{
+				{Type: "integer", Minimum: new(float64)}, {Type: typeString, Format: "date-time"},
+			}}),
+		},
 		RequestBody: jsonBody(api, "Evaluation Context and list of flag for this API call", true,
 			model.OFREPEvalFlagRequest{}),
 		Responses: map[string]*huma.Response{
-			statusKey(http.StatusOK): jsonResponse[model.OFREPBulkEvaluateSuccessResponse](
+			statusKey(http.StatusOK): withETagHeader(jsonResponse[model.OFREPBulkEvaluateSuccessResponse](
 				api,
 				"OFREP successful evaluation response",
-			),
+			)),
 			statusKey(http.StatusNotModified): notModified(),
 			statusKey(http.StatusBadRequest): jsonResponse[model.OFREPCommonResponseError](
 				api,

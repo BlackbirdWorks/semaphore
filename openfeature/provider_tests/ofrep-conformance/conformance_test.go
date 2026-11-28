@@ -1,19 +1,9 @@
 package ofrepconformance_test
 
 import (
-	"bufio"
-	"bytes"
-	"context"
 	"encoding/json"
-	"fmt"
-	"io"
-	"net"
 	"net/http"
-	"net/url"
-	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,8 +12,7 @@ import (
 )
 
 const (
-	httpClientTimeout = 5 * time.Second
-	validToken        = "authorized_token"
+	validToken = "authorized_token"
 
 	headerXAPIKey      = "X-API-Key"
 	headerAuth         = "Authorization"
@@ -55,120 +44,12 @@ const (
 	reasonDisabled             = "DISABLED"
 	reasonSplit                = "SPLIT"
 	reasonStatic               = "STATIC"
-	crlfPairLen                = 4
 
 	defaultCtxJSON    = `{"context":{"targetingKey":"user-1","email":"john.doe@gofeatureflag.org","version":"10.0.0-10"}}`
 	userOneCtxJSON    = `{"context":{"targetingKey":"user-1"}}`
 	activeFlagListCtx = `{"context":{"targetingKey":"user-1","email":"john.doe@gofeatureflag.org",` +
 		`"gofeatureflag":{"flagList":["bool_targeting_match","string_key","integer_key","double_key","object_key"]}}}`
 )
-
-func postOFREPRequest(
-	t *testing.T,
-	rawURL string,
-	headers map[string]string,
-	body string,
-) (int, http.Header, []byte) {
-	t.Helper()
-
-	var reader io.Reader = http.NoBody
-	if body != "" {
-		reader = strings.NewReader(body)
-	}
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, rawURL, reader)
-	require.NoError(t, err)
-
-	if body != "" {
-		req.Header.Set("Content-Type", contentTypeJSON)
-	}
-
-	for key, val := range headers {
-		req.Header.Set(key, val)
-	}
-
-	client := &http.Client{Timeout: httpClientTimeout}
-
-	resp, err := client.Do(req)
-	require.NoError(t, err)
-
-	defer func() { _ = resp.Body.Close() }()
-
-	respBody, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-
-	return resp.StatusCode, resp.Header, respBody
-}
-
-// postRawHTTP1 reads the raw HTTP/1.1 wire bytes after the header block before net/http strips 304 bodies.
-func postRawHTTP1(
-	t *testing.T,
-	rawURL string,
-	headers map[string]string,
-	body string,
-) (int, http.Header, []byte) {
-	t.Helper()
-
-	parsed, err := url.Parse(rawURL)
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithTimeout(t.Context(), httpClientTimeout)
-	defer cancel()
-
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", parsed.Host)
-	require.NoError(t, err)
-
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
-	defer func() { _ = conn.Close() }()
-
-	var reqBuf bytes.Buffer
-	fmt.Fprintf(&reqBuf, "POST %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n", parsed.RequestURI(), parsed.Host)
-
-	for key, val := range headers {
-		fmt.Fprintf(&reqBuf, "%s: %s\r\n", key, val)
-	}
-
-	if body != "" {
-		fmt.Fprintf(&reqBuf, "Content-Type: %s\r\nContent-Length: %d\r\n", contentTypeJSON, len(body))
-	}
-
-	reqBuf.WriteString("\r\n")
-	reqBuf.WriteString(body)
-
-	_, err = conn.Write(reqBuf.Bytes())
-	require.NoError(t, err)
-
-	raw, err := io.ReadAll(conn)
-	require.NoError(t, err)
-
-	headerEnd := bytes.Index(raw, []byte("\r\n\r\n"))
-	require.NotEqual(t, -1, headerEnd, "malformed HTTP/1.1 response: %q", string(raw))
-
-	headPart := raw[:headerEnd+crlfPairLen]
-	wireBody := raw[headerEnd+crlfPairLen:]
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, http.NoBody)
-	require.NoError(t, err)
-
-	resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(headPart)), req)
-	require.NoError(t, err)
-
-	defer func() { _ = resp.Body.Close() }()
-
-	return resp.StatusCode, resp.Header, wireBody
-}
-
-func TestOFREPConformance_SpecHeaders(t *testing.T) {
-	t.Parallel()
-
-	spec, err := ofrepconformance.LoadSpec(filepath.Join("testdata", "openapi.yaml"))
-	require.NoError(t, err)
-
-	assert.True(t, spec.HasHeader(bulkFlagsPath, http.MethodPost, http.StatusOK, "ETag"))
-	assert.True(t, spec.HasHeader(singleFlagPath, http.MethodPost, http.StatusTooManyRequests, headerRetryAfter))
-	assert.True(t, spec.HasHeader(bulkFlagsPath, http.MethodPost, http.StatusTooManyRequests, headerRetryAfter))
-}
 
 type singleFlagCase struct {
 	headers          map[string]string
@@ -440,7 +321,13 @@ func singleFlagTestCases(baseURL, authURL string) []singleFlagCase {
 	}
 }
 
-func runSingleFlagCase(t *testing.T, spec *ofrepconformance.Spec, baseURL string, testCase *singleFlagCase) {
+func runSingleFlagCase(
+	t *testing.T,
+	hns *harness,
+	spec *ofrepconformance.Spec,
+	baseURL string,
+	testCase *singleFlagCase,
+) {
 	t.Helper()
 
 	headers := testCase.headers
@@ -448,7 +335,7 @@ func runSingleFlagCase(t *testing.T, spec *ofrepconformance.Spec, baseURL string
 		headers = map[string]string{headerXAPIKey: validToken}
 	}
 
-	status, hdrs, body := postOFREPRequest(
+	status, hdrs, body := hns.post(
 		t,
 		testCase.targetURL+"/ofrep/v1/evaluate/flags/"+testCase.flagKey,
 		headers,
@@ -475,20 +362,18 @@ func runSingleFlagCase(t *testing.T, spec *ofrepconformance.Spec, baseURL string
 	}
 }
 
-func TestOFREPConformance_SingleFlag(t *testing.T) {
-	t.Parallel()
+func conformanceSingleFlag(t *testing.T, hns *harness) {
+	t.Helper()
 
-	spec, err := ofrepconformance.LoadSpec(filepath.Join("testdata", "openapi.yaml"))
-	require.NoError(t, err)
+	spec := hns.spec
 
-	baseURL := startRelay(t, "bootstrap.yaml")
-	authURL := startRelay(t, "bootstrap-authenticated.yaml")
+	baseURL, authURL := hns.base, hns.auth
 
 	for _, tt := range singleFlagTestCases(baseURL, authURL) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			runSingleFlagCase(t, spec, baseURL, &tt)
+			runSingleFlagCase(t, hns, spec, baseURL, &tt)
 		})
 	}
 }
@@ -604,20 +489,18 @@ func assertBulkValidResponse(t *testing.T, body []byte, valErr error, testCase *
 	}
 }
 
-func TestOFREPConformance_Bulk(t *testing.T) {
-	t.Parallel()
+func conformanceBulk(t *testing.T, hns *harness) {
+	t.Helper()
 
-	spec, err := ofrepconformance.LoadSpec(filepath.Join("testdata", "openapi.yaml"))
-	require.NoError(t, err)
+	spec := hns.spec
 
-	baseURL := startRelay(t, "bootstrap.yaml")
-	authURL := startRelay(t, "bootstrap-authenticated.yaml")
+	baseURL, authURL := hns.base, hns.auth
 
 	t.Run("active flags ETag and If-None-Match 304", func(t *testing.T) {
 		t.Parallel()
 
 		authHdr := map[string]string{headerXAPIKey: validToken}
-		status, hdrs, body := postOFREPRequest(t, baseURL+bulkFlagsPath, authHdr, activeFlagListCtx)
+		status, hdrs, body := hns.post(t, baseURL+bulkFlagsPath, authHdr, activeFlagListCtx)
 		require.Equal(t, http.StatusOK, status, "body: %s", string(body))
 		require.NoError(t, spec.ValidateResponse(bulkFlagsPath, http.MethodPost, status, hdrs, body))
 		assertActiveBulkFlags(t, body)
@@ -625,7 +508,7 @@ func TestOFREPConformance_Bulk(t *testing.T) {
 		etag := hdrs.Get("ETag")
 		require.NotEmpty(t, etag)
 
-		status304, hdrs304, body304 := postRawHTTP1(
+		status304, hdrs304, body304 := hns.postRaw(
 			t, baseURL+bulkFlagsPath,
 			map[string]string{headerXAPIKey: validToken, headerIfNoneMatch: etag}, activeFlagListCtx,
 		)
@@ -634,7 +517,7 @@ func TestOFREPConformance_Bulk(t *testing.T) {
 		assert.Equal(t, etag, hdrs304.Get("ETag"))
 		require.NoError(t, spec.ValidateResponse(bulkFlagsPath, http.MethodPost, status304, hdrs304, body304))
 
-		statusWeak, hdrsWeak, bodyWeak := postRawHTTP1(
+		statusWeak, hdrsWeak, bodyWeak := hns.postRaw(
 			t, baseURL+bulkFlagsPath,
 			map[string]string{headerXAPIKey: validToken, headerIfNoneMatch: "W/" + etag}, activeFlagListCtx,
 		)
@@ -642,7 +525,7 @@ func TestOFREPConformance_Bulk(t *testing.T) {
 		assert.Empty(t, bodyWeak)
 		require.NoError(t, spec.ValidateResponse(bulkFlagsPath, http.MethodPost, statusWeak, hdrsWeak, bodyWeak))
 
-		statusStale, hdrsStale, bodyStale := postOFREPRequest(
+		statusStale, hdrsStale, bodyStale := hns.post(
 			t, baseURL+bulkFlagsPath,
 			map[string]string{headerXAPIKey: validToken, headerIfNoneMatch: `"stale"`}, activeFlagListCtx,
 		)
@@ -736,7 +619,9 @@ func TestOFREPConformance_Bulk(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
+	for idx := range tests {
+		tt := &tests[idx]
+
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -745,17 +630,17 @@ func TestOFREPConformance_Bulk(t *testing.T) {
 				headers = map[string]string{headerXAPIKey: validToken}
 			}
 
-			status, hdrs, body := postOFREPRequest(t, tt.targetURL+bulkFlagsPath, headers, tt.body)
+			status, hdrs, body := hns.post(t, tt.targetURL+bulkFlagsPath, headers, tt.body)
 			assert.Equal(t, tt.wantStatus, status, "body: %s", string(body))
 
 			valErr := spec.ValidateResponse(bulkFlagsPath, http.MethodPost, status, hdrs, body)
-			assertBulkValidResponse(t, body, valErr, &tt)
+			assertBulkValidResponse(t, body, valErr, tt)
 		})
 	}
 }
 
-func TestOFREPConformance_Reasons(t *testing.T) {
-	t.Parallel()
+func conformanceReasons(t *testing.T, hns *harness) {
+	t.Helper()
 
 	const reasonFlagsYAML = `static_flag:
   variations:
@@ -808,8 +693,7 @@ disabled_flag:
   disable: true
 `
 
-	spec, err := ofrepconformance.LoadSpec(filepath.Join("testdata", "openapi.yaml"))
-	require.NoError(t, err)
+	spec := hns.spec
 
 	baseURL := startRelayWithFlags(t, reasonFlagsYAML)
 	hdrs := map[string]string{headerXAPIKey: validToken}
@@ -888,7 +772,7 @@ disabled_flag:
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			status, respHdrs, body := postOFREPRequest(
+			status, respHdrs, body := hns.post(
 				t,
 				baseURL+"/ofrep/v1/evaluate/flags/"+tt.flagKey,
 				hdrs,
@@ -912,7 +796,7 @@ disabled_flag:
 				assert.NotContains(t, singleParsed, jsonValueField)
 			}
 
-			bulkStatus, bulkHdrs, bulkBody := postOFREPRequest(t, baseURL+bulkFlagsPath, hdrs, tt.contextJSON)
+			bulkStatus, bulkHdrs, bulkBody := hns.post(t, baseURL+bulkFlagsPath, hdrs, tt.contextJSON)
 			assert.Equal(t, http.StatusOK, bulkStatus, "body: %s", string(bulkBody))
 			require.NoError(t, spec.ValidateResponse(bulkFlagsPath, http.MethodPost, bulkStatus, bulkHdrs, bulkBody))
 

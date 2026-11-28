@@ -206,6 +206,10 @@ func (a *Adapter) lookup(apiKey string) (*view, error) {
 	}
 
 	set, route := current.Route(apiKey)
+	if route == flagruntime.RouteAdmin {
+		return nil, fmt.Errorf("%w", service.NewAdminKeyError(errFlagSetNotFound.Error()))
+	}
+
 	if route != flagruntime.RouteFlagSet && route != flagruntime.RoutePending {
 		return nil, errFlagSetNotFound
 	}

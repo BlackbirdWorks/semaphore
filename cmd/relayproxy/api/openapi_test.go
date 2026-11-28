@@ -52,13 +52,14 @@ func TestOpenAPIOptionalKey(t *testing.T) {
 	const (
 		header = "ApiKeyAuth"
 		xKey   = "XApiKeyAuth"
+		bearer = "BearerAuth"
 		query  = "ApiKeyQueryAuth"
 	)
 
 	both := [][]string{{header}, {xKey}, {}}
 	want := map[string][][]string{
 		"allFlags": both, "collectEvalData": both, "flagChange": both, "flagConfiguration": both, "flagEval": both,
-		"ofrepBulkEvaluate": both, "ofrepEvaluate": both,
+		"ofrepBulkEvaluate": {{xKey}, {bearer}, {}}, "ofrepEvaluate": {{xKey}, {bearer}, {}},
 		"getManifest":        {{header}, {}},
 		"sseFlagChange":      {{query}, {}},
 		"wsFlagChange":       {{query}, {}},

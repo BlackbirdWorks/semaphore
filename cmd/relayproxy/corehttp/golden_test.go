@@ -15,11 +15,12 @@ import (
 
 // the texts of the expectations that several cases share.
 const (
-	keyBoolFlag     = `"key":"bool-flag"`
-	keyMessage      = `"message"`
-	msgUnauthorized = `"message":"Unauthorized"`
-	msgMissingKey   = `missing value in request header`
-	msgNoFlagSet    = `error while getting flagset: flagset not found for API key`
+	keyBoolFlag       = `"key":"bool-flag"`
+	keyMessage        = `"message"`
+	msgUnauthorized   = `"message":"Unauthorized"`
+	msgMissingKey     = `missing value in request header`
+	msgNoFlagSet      = `error while getting flagset: flagset not found for API key`
+	msgOFREPNoFlagSet = `the API key does not give access to a flag set`
 )
 
 const (
@@ -259,6 +260,7 @@ func expectations() map[string]expectation {
 		ok       = http.StatusOK
 		bad      = http.StatusBadRequest
 		denied   = http.StatusUnauthorized
+		forbid   = http.StatusForbidden
 	)
 
 	return map[string]expectation{
@@ -321,7 +323,7 @@ func expectations() map[string]expectation {
 		"auth empty key":                             {msgMissingKey, denied},
 		"auth unknown key":                           {msgUnauthorized, denied},
 		"auth unknown bearer":                        {`invalid key`, denied},
-		"auth admin key":                             {msgNoFlagSet, bad},
+		"auth admin key":                             {msgOFREPNoFlagSet, forbid},
 		"auth unknown key on bulk":                   {keyMessage, denied},
 		"auth unknown key on legacy eval":            {keyMessage, denied},
 		"auth unknown key on allflags":               {keyMessage, denied},

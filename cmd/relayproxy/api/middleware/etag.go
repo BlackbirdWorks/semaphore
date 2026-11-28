@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 )
@@ -41,14 +42,46 @@ func (b *etagBuffer) setStatus(status int) { b.status = status }
 
 // answer returns the ETag of the response, and whether it has to be sent: a 2xx response with a body gets one,
 // and a request that carries it in If-None-Match gets a 304 instead of the body.
-func (b *etagBuffer) answer(ifNoneMatch string) (string, bool) {
+func (b *etagBuffer) answer(ifNoneMatch []string) (string, bool) {
 	if b.status/100 != 2 || b.status == http.StatusNoContent || b.buf.Len() == 0 {
 		return "", false
 	}
 
 	etag := `"` + strconv.Itoa(b.len) + "-" + hex.EncodeToString(b.hash.Sum(nil)) + `"`
 
-	return etag, ifNoneMatch == etag || ifNoneMatch == "W/"+etag
+	return etag, ETagMatchesAny(ifNoneMatch, etag)
+}
+
+// ETagMatchesAny is [ETagMatches] for the lines of the If-None-Match header of a request: several lines are one
+// comma separated list (RFC 9110 section 5.3).
+func ETagMatchesAny(lines []string, etag string) bool {
+	for _, line := range lines {
+		if ETagMatches(line, etag) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ETagMatches reports whether an If-None-Match header value matches the entity tag, as RFC 9110 section 13.1.2
+// defines it: the value is `*`, or a comma separated list of entity tags that is compared to the tag with the weak
+// comparison (the `W/` prefix is ignored on both sides).
+func ETagMatches(ifNoneMatch, etag string) bool {
+	etag = strings.TrimPrefix(etag, "W/")
+
+	for rest := ifNoneMatch; rest != ""; {
+		var item string
+
+		item, rest, _ = strings.Cut(rest, ",")
+		item = strings.TrimPrefix(strings.TrimSpace(item), "W/")
+
+		if item == "*" || item == etag {
+			return true
+		}
+	}
+
+	return false
 }
 
 // ETag adds a strong ETag to the 2xx responses with a body, and answers 304 when the request carries it in
@@ -61,7 +94,7 @@ func ETag() Func {
 
 			h := w.Header()
 			if h.Get("ETag") == "" {
-				if etag, notModified := bufWriter.answer(r.Header.Get("If-None-Match")); etag != "" {
+				if etag, notModified := bufWriter.answer(r.Header.Values("If-None-Match")); etag != "" {
 					h.Set("ETag", etag)
 
 					if notModified {
@@ -124,7 +157,7 @@ func ETagHuma() func(huma.Context, func(huma.Context)) {
 		etagCtx := &etagContext{hctx: ctx, etagBuffer: newETagBuffer()}
 		next(etagCtx)
 
-		if etag, notModified := etagCtx.answer(ctx.Header("If-None-Match")); etag != "" {
+		if etag, notModified := etagCtx.answer(requestLines(ctx, "If-None-Match")); etag != "" {
 			ctx.SetHeader("ETag", etag)
 
 			if notModified {
@@ -139,4 +172,17 @@ func ETagHuma() func(huma.Context, func(huma.Context)) {
 			_, _ = ctx.BodyWriter().Write(etagCtx.buf.Bytes())
 		}
 	}
+}
+
+// requestLines returns every line of a header of the request.
+func requestLines(ctx huma.Context, name string) []string {
+	var lines []string
+
+	ctx.EachHeader(func(key, value string) {
+		if strings.EqualFold(key, name) {
+			lines = append(lines, value)
+		}
+	})
+
+	return lines
 }

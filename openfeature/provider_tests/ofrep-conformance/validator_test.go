@@ -137,13 +137,13 @@ func TestSpec_ValidateSingleFlagResponse(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "array value rejected",
+			name:    "array value accepted: the named deviation of the object flag",
 			path:    singleFlagPath,
 			method:  http.MethodPost,
 			status:  http.StatusOK,
 			headers: jsonHeaders(),
 			body:    `{"key":"f","value":[1,2],"reason":"STATIC"}`,
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name:    "invalid reason DEFAULT rejected",
@@ -413,7 +413,7 @@ func TestSpec_ValidateBulkAndTransportResponse(t *testing.T) {
 			path:    singleFlagPath,
 			method:  http.MethodPost,
 			status:  http.StatusOK,
-			headers: http.Header{"Content-Type": []string{"text/plain"}},
+			headers: http.Header{"Content-Type": []string{contentTypePlain}},
 			body:    `{"key":"f","value":true,"reason":"STATIC"}`,
 			wantErr: true,
 		},
@@ -472,4 +472,58 @@ func TestSpec_URIFailureRedactsValue(t *testing.T) {
 	err = spec.ValidateResponse(bulkFlagsPath, http.MethodPost, http.StatusOK, jsonHeaders("ETag", `"abc"`), body)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "secret-token")
+}
+
+// The validator follows the pinned document with one named deviation.
+func TestDeviationsListsExactlyTheArrayValue(t *testing.T) {
+	t.Parallel()
+
+	got := ofrepconformance.Deviations()
+	require.Len(t, got, 1)
+
+	assert.Equal(t, "objectFlag", got[0].Schema)
+	assert.Equal(t, "value", got[0].Property)
+	assert.NotEmpty(t, got[0].Reason)
+	assert.Len(t, got[0].Evidence, 5)
+}
+
+func TestSpec_ArrayValueIsAcceptedOnlyForTheObjectFlag(t *testing.T) {
+	t.Parallel()
+
+	spec, err := ofrepconformance.LoadSpec(filepath.Join("testdata", "openapi.yaml"))
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "array value of a flag", body: `{"key":"a","reason":"STATIC","variant":"v","value":["x",1]}`},
+		{name: "empty array value", body: `{"key":"a","reason":"STATIC","variant":"v","value":[]}`},
+		{name: "object value", body: `{"key":"a","reason":"STATIC","variant":"v","value":{"x":1}}`},
+		{name: "null value", body: `{"key":"a","reason":"STATIC","variant":"v","value":null}`, wantErr: true},
+		{name: "array as the key", body: `{"key":["a"],"reason":"STATIC","value":true}`, wantErr: true},
+		{name: "array as the reason", body: `{"key":"a","reason":["STATIC"],"value":true}`, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotErr := spec.ValidateResponse(
+				singleFlagPath,
+				http.MethodPost,
+				http.StatusOK,
+				jsonHeaders(),
+				[]byte(tt.body),
+			)
+			if tt.wantErr {
+				require.Error(t, gotErr)
+
+				return
+			}
+
+			require.NoError(t, gotErr)
+		})
+	}
 }

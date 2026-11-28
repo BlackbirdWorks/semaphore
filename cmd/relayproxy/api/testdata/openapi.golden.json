@@ -1231,6 +1231,11 @@
         "name": "apiKey",
         "type": "apiKey"
       },
+      "BearerAuth": {
+        "description": "The API key of the flag set as a bearer token: Authorization: Bearer \u003ckey\u003e.",
+        "scheme": "bearer",
+        "type": "http"
+      },
       "XApiKeyAuth": {
         "description": "Use configured APIKeys in yaml config as authorization keys via X-API-Key header,\ndisabled when this yaml config is not set.",
         "in": "header",
@@ -1550,6 +1555,31 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Metadata of the change notification that triggered this request. The relay accepts it and evaluates the flags as for any other request.",
+            "in": "query",
+            "name": "flagConfigEtag",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Metadata of the change notification that triggered this request. The relay accepts it and evaluates the flags as for any other request.",
+            "in": "query",
+            "name": "flagConfigLastModified",
+            "schema": {
+              "oneOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              ]
+            }
           }
         ],
         "requestBody": {
@@ -1572,7 +1602,15 @@
                 }
               }
             },
-            "description": "OFREP successful evaluation response"
+            "description": "OFREP successful evaluation response",
+            "headers": {
+              "ETag": {
+                "description": "Entity tag of the evaluation: send it back in If-None-Match.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "304": {
             "description": "Etag: \"117-0193435c612c50d93b798619d9464856263dbf9f\""
@@ -1620,10 +1658,10 @@
         },
         "security": [
           {
-            "ApiKeyAuth": []
+            "XApiKeyAuth": []
           },
           {
-            "XApiKeyAuth": []
+            "BearerAuth": []
           },
           {}
         ],
@@ -1633,7 +1671,7 @@
         ]
       }
     },
-    "/ofrep/v1/evaluate/flags/{flag_key}": {
+    "/ofrep/v1/evaluate/flags/{key}": {
       "post": {
         "description": "Making a **POST** request to the URL `/ofrep/v1/evaluate/flags/{your_flag_name}` will give you the\nvalue of the flag for this evaluation context\n\nThe key is optional when a flag set is published without API keys (the public flags): a request without a key is then served by those flags. Without such a flag set every request needs a key. A wrong key is always refused.",
         "operationId": "ofrepEvaluate",
@@ -1641,7 +1679,7 @@
           {
             "description": "Name of your feature flag",
             "in": "path",
-            "name": "flag_key",
+            "name": "key",
             "required": true,
             "schema": {
               "type": "string"
@@ -1690,6 +1728,16 @@
             },
             "description": "Unauthorized"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden - The API key does not give access to a flag set (an admin key)"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -1713,10 +1761,10 @@
         },
         "security": [
           {
-            "ApiKeyAuth": []
+            "XApiKeyAuth": []
           },
           {
-            "XApiKeyAuth": []
+            "BearerAuth": []
           },
           {}
         ],

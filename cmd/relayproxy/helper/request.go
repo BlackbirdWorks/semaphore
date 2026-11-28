@@ -50,7 +50,7 @@ func FlagSet(flagsetManager service.FlagSetResolver, apiKey string) (service.Fla
 
 	flagset, err := flagsetManager.FlagSet(apiKey)
 	if err != nil {
-		return nil, NewHTTPError(http.StatusBadRequest, "error while getting flagset: "+err.Error())
+		return nil, NewHTTPError(http.StatusBadRequest, "error while getting flagset: "+err.Error()).WithCause(err)
 	}
 
 	return flagset, nil

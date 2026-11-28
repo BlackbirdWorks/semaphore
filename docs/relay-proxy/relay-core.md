@@ -86,7 +86,7 @@ seam; the tests of the handlers implement it on engine clients.
   flag configuration, flag change, the manifest, the collection of events, the SSE and websocket streams, `/health`,
   `/info` (with the state of the runtime), `/livez`, `/readyz` and `/startupz`; see [probes](probes.md).
 - **Keys**: every request needs a key. A flag set key routes to its flag set, an admin key is accepted and then
-  answered with 400 (a key that is both an admin key and a flag set key is neither: it is answered with 401 and the flag set reports `admin-key-collision`), an unknown key or the key of a removed flag set is answered with 401.
+  answered with 403 on the OFREP endpoints and with 400 on the others (a key that is both an admin key and a flag set key is neither: it is answered with 401 and the flag set reports `admin-key-collision`), an unknown key or the key of a removed flag set is answered with 401.
 - **Unavailable flag set** (known, never loaded): a single evaluation answers `FLAG_NOT_FOUND`, a bulk evaluation
   answers 200 with no flag.
 - **Events**: an evaluation of a flag that tracks its events and an event sent to the data collector reach the
