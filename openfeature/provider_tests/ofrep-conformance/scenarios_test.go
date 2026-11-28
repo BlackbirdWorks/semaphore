@@ -25,11 +25,13 @@ type scenario struct {
 	Body     map[string]any `json:"body"`
 	Metadata map[string]any `json:"metadata"`
 	Name     string         `json:"name"`
-	Source   string         `json:"source"`
-	Flag     string         `json:"flag"`
-	Bulk     string         `json:"bulk"`
-	Absent   []string       `json:"absent"`
-	Status   int            `json:"status"`
+	// AbsentMetadata are the entries the metadata must not have.
+	AbsentMetadata []string `json:"absentMetadata"`
+	Source         string   `json:"source"`
+	Flag           string   `json:"flag"`
+	Bulk           string   `json:"bulk"`
+	Absent         []string `json:"absent"`
+	Status         int      `json:"status"`
 }
 
 func loadScenarios(t *testing.T) []scenario {
@@ -85,6 +87,10 @@ func assertFields(t *testing.T, rec *recorder, got map[string]any, scen *scenari
 		for key, want := range scen.Metadata {
 			assert.Equal(t, want, gotMeta[key], "metadata %s of %v", key, got)
 		}
+
+		for _, key := range scen.AbsentMetadata {
+			assert.NotContains(t, gotMeta, key, "metadata of %v", got)
+		}
 	}
 }
 
@@ -96,7 +102,11 @@ func conformanceScenarios(t *testing.T, hns *harness) {
 
 	base := startRelayWithFlags(t, string(flags))
 
-	for _, scen := range loadScenarios(t) {
+	scenarios := loadScenarios(t)
+
+	for idx := range scenarios {
+		scen := scenarios[idx]
+
 		body, marshalErr := json.Marshal(map[string]any{"context": scen.Context})
 		require.NoError(t, marshalErr)
 
@@ -107,8 +117,9 @@ func conformanceScenarios(t *testing.T, hns *harness) {
 				method: http.MethodPost, url: base + singleFlagPrefix + scen.Flag,
 				headers: keyHeader(), body: string(body),
 			})
-			assert.Equal(t, scen.Status, res.status, string(res.body))
+			res.wantStatus(t, scen.Status)
 			assertFields(t, hns.rec, decodeObject(t, res.body), &scen, true)
+			res.bodyAsserted()
 		})
 
 		t.Run("bulk: "+scen.Name, func(t *testing.T) {
@@ -117,7 +128,10 @@ func conformanceScenarios(t *testing.T, hns *harness) {
 			res := hns.send(t, &request{
 				method: http.MethodPost, url: base + bulkFlagsPath, headers: keyHeader(), body: string(body),
 			})
+			res.wantStatus(t, http.StatusOK)
 			require.Equal(t, http.StatusOK, res.status, string(res.body))
+
+			defer res.bodyAsserted()
 
 			item, found := parseBulkFlags(t, res.body)[scen.Flag]
 

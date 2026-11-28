@@ -1,6 +1,7 @@
 package flagruntime
 
 import (
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -83,6 +84,14 @@ type FlagSet struct {
 	Rejected   int
 	changeOnce sync.Once
 }
+
+// ConfigETag is the identity of the configuration the flag set serves: the hash of its flags (and of the segments
+// they use), in hexadecimal. It depends on the content only, so every replica that serves the same content has the
+// same value, and a rebuild that changes nothing keeps it.
+func (f *FlagSet) ConfigETag() string { return strconv.FormatUint(f.Hash, hexBase) }
+
+// hexBase is the base of the text form of [FlagSet.ConfigETag].
+const hexBase = 16
 
 // Flag returns the flag with a name. It does not allocate.
 func (f *FlagSet) Flag(name string) (*flagdef.InternalFlag, bool) {

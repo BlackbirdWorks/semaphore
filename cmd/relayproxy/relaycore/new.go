@@ -182,6 +182,7 @@ func (c *Core) newEngine(
 
 	return flagruntime.NewEngine(c.log, c.svc, c.holder,
 		flagruntime.WithHooks(hooks),
+		flagruntime.WithNow(deps.Now),
 		flagruntime.WithSegmentStores(c.segs),
 		flagruntime.WithSegments(&flagruntime.SegmentEnv{
 			Binder:      c.segs,

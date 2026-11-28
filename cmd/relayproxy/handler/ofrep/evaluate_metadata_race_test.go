@@ -53,9 +53,9 @@ func TestEvaluate_DoesNotWriteIntoTheCachedFlag(t *testing.T) {
 			flagKey:    "disabled-with-metadata",
 			wantValue:  nil,
 			wantReason: "DISABLED",
+			// the document types the entries of the metadata as booleans, strings and numbers: the object is not sent
 			wantMetadata: map[string]any{
 				metaOwner:           "team-a",
-				"links":             map[string]any{"docs": "https://example.com/docs"},
 				metaCacheable:       true,
 				metaLegacyCacheable: true,
 			},

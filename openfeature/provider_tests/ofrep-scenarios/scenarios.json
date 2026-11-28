@@ -1,5 +1,5 @@
 {
- "description": "Language neutral scenarios of the OFREP behaviour of the relay: serve flags.yaml, send the context to the evaluation of the flag and to the bulk evaluation, expect these results. body: fields of the response that must equal; absent: fields that must not be there; metadata: entries the metadata must contain; bulk: same (the bulk item has the same fields), error (the item has the errorCode and no value), omitted (no item). source: where the expectation comes from: spec (the pinned document or the OFREP text), provider (an official provider relies on it), relay (engine behaviour that neither defines); basis says why.",
+ "description": "Language neutral scenarios of the OFREP behaviour of the relay: serve flags.yaml, send the context to the evaluation of the flag and to the bulk evaluation, expect these results. body: fields of the response that must equal; absent: fields that must not be there; metadata: entries the metadata must contain; absentMetadata: entries the metadata must not contain; bulk: same (the bulk item has the same fields), error (the item has the errorCode and no value), omitted (no item). source: where the expectation comes from: spec (the pinned document or the OFREP text), provider (an official provider relies on it), relay (engine behaviour that neither defines); basis says why.",
  "scenarios": [
   {
    "name": "static boolean",
@@ -375,6 +375,31 @@
    },
    "source": "spec",
    "basis": "metadata is an object of boolean, string and number values"
+  },
+  {
+   "name": "flag metadata that is not a boolean, a string or a number",
+   "flag": "nested_metadata_flag",
+   "context": {
+    "targetingKey": "user-1"
+   },
+   "status": 200,
+   "body": {
+    "key": "nested_metadata_flag",
+    "value": true,
+    "variant": "on",
+    "reason": "STATIC"
+   },
+   "bulk": "same",
+   "metadata": {
+    "team": "payments"
+   },
+   "absentMetadata": [
+    "labels",
+    "owners",
+    "none"
+   ],
+   "source": "spec",
+   "basis": "metadata: additionalProperties are booleans, strings or numbers: an object, a list or null entry of the flag is not sent"
   },
   {
    "name": "flag not found",

@@ -1,6 +1,7 @@
 package manifestreader_test
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -127,5 +128,30 @@ func TestReader_RefreshesDoNotPostponeARetry(t *testing.T) {
 
 		assert.Equal(t, 1, manifestGets, "%s: one poll of the manifest", tt.name)
 		assert.Equal(t, tt.wantObjectGet, objectGets, "%s: requests of the failed object", tt.name)
+	}
+}
+
+// A refresh does not wait for the spread of the fetches: the delay that keeps replicas from fetching a new generation
+// together is for the rounds of the schedule, and whoever asks for a refresh waits for its result.
+func TestReader_RefreshSkipsTheFetchSpread(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	publish(t, store, 1, threeObjects()...)
+
+	rdr := startRig(t, store, &manifestreader.Config{PollInterval: time.Hour, FetchSpread: time.Hour}, fixedJitter(0.9))
+	publish(t, store, 2, threeObjects()...)
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+
+	result, err := rdr.reader.Refresh(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, uint64(2), result.Generation)
+	assert.True(t, result.Changed)
+	// the spread delay would be the jitter (0.9) of the window (an hour)
+	for _, wait := range rdr.sched.waited() {
+		assert.Equal(t, time.Hour, wait, "the scheduler was asked for the wait between the rounds only")
 	}
 }

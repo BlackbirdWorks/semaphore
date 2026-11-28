@@ -175,7 +175,7 @@ func conformanceWire(t *testing.T, hns *harness) {
 				method: tt.method, url: hns.relayURL(tt.relay) + tt.path, headers: tt.headers,
 				body: tt.body, contentType: tt.contentType,
 			})
-			assert.Equal(t, tt.wantStatus, res.status, "body: %s", string(res.body))
+			res.wantStatus(t, tt.wantStatus)
 
 			parsed := decodeObject(t, res.body)
 			if tt.wantItemKeys != nil {
@@ -191,6 +191,11 @@ func conformanceWire(t *testing.T, hns *harness) {
 
 			if tt.wantKey != "" {
 				assert.Equal(t, tt.wantKey, parsed[jsonKeyField])
+				res.bodyAsserted()
+			}
+
+			if tt.wantItemKeys != nil {
+				res.bodyAsserted()
 			}
 		})
 	}
@@ -211,21 +216,21 @@ func conformanceBulkETag(t *testing.T, hns *harness) {
 
 	bulkURL := hns.base + bulkFlagsPath
 
-	status, hdr, _ := hns.post(t, bulkURL, keyHeader(), userOneCtxJSON)
-	require.Equal(t, http.StatusOK, status)
+	first := hns.post(t, bulkURL, keyHeader(), userOneCtxJSON)
+	first.wantStatus(t, http.StatusOK)
 
-	etag := hdr.Get("ETag")
-	require.NotEmpty(t, etag)
+	etag := first.header.Get("ETag")
+	first.wantStrongETag(t)
 
-	otherStatus, otherHdr, _ := hns.post(
+	other := hns.post(
 		t,
 		bulkURL,
 		keyHeader(),
 		`{"context":{"targetingKey":"user-1","gofeatureflag":{"flagList":["`+flagStringKey+`"]}}}`,
 	)
-	require.Equal(t, http.StatusOK, otherStatus)
+	other.wantStatus(t, http.StatusOK)
 
-	otherETag := otherHdr.Get("ETag")
+	otherETag := other.header.Get("ETag")
 
 	tests := []struct {
 		name        string
@@ -253,8 +258,8 @@ func conformanceBulkETag(t *testing.T, hns *harness) {
 			method: http.MethodPost, url: bulkURL, headers: keyHeader(), body: userOneCtxJSON,
 			repeated: map[string][]string{headerIfNoneMatch: {`"a"`, etag}},
 		})
-		assert.Equal(t, http.StatusNotModified, res.status)
-		assert.Equal(t, etag, res.header.Get("ETag"))
+		res.wantStatus(t, http.StatusNotModified)
+		res.wantETag(t, etag)
 		assert.Empty(t, res.body)
 	})
 
@@ -268,13 +273,13 @@ func conformanceBulkETag(t *testing.T, hns *harness) {
 				send = hns.postRaw
 			}
 
-			gotStatus, gotHdr, gotBody := send(t, bulkURL,
-				map[string]string{headerXAPIKey: validToken, headerIfNoneMatch: tt.ifNoneMatch}, userOneCtxJSON)
-			assert.Equal(t, tt.wantStatus, gotStatus)
-			assert.Equal(t, etag, gotHdr.Get("ETag"))
+			res := send(t, bulkURL, map[string]string{headerXAPIKey: validToken, headerIfNoneMatch: tt.ifNoneMatch},
+				userOneCtxJSON)
+			res.wantStatus(t, tt.wantStatus)
+			res.wantETag(t, etag)
 
 			if tt.wantStatus == http.StatusNotModified {
-				assert.Empty(t, gotBody)
+				assert.Empty(t, res.body)
 			}
 		})
 	}
@@ -288,7 +293,7 @@ func conformanceEventStreams(t *testing.T, hns *harness) {
 	res := hns.send(t, &request{
 		method: http.MethodPost, url: hns.stream + bulkFlagsPath, headers: keyHeader(), body: userOneCtxJSON,
 	})
-	require.Equal(t, http.StatusOK, res.status)
+	res.wantStatus(t, http.StatusOK)
 
 	var payload struct {
 		EventStreams []struct {
@@ -304,10 +309,12 @@ func conformanceEventStreams(t *testing.T, hns *harness) {
 	assert.Equal(t, "sse", payload.EventStreams[0].Type)
 	assert.Equal(t, streamInactivitySec, payload.EventStreams[0].InactivityDelaySec)
 	assert.Equal(t, streamBaseURL+"/stream/v1/sse/flag/change?apiKey="+validToken, payload.EventStreams[0].URL)
+	res.bodyAsserted()
 
 	plain := hns.send(t, &request{
 		method: http.MethodPost, url: hns.base + bulkFlagsPath, headers: keyHeader(), body: userOneCtxJSON,
 	})
+	plain.wantStatus(t, http.StatusOK)
 	assert.NotContains(
 		t,
 		string(plain.body),

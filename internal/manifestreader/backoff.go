@@ -151,9 +151,10 @@ func (r *Reader) objectsWaiting() int {
 }
 
 // spreadWait waits the random delay before the fetches of a new generation: jitter x min(FetchSpread,
-// PollInterval). It reports false when the context ended.
+// PollInterval), unless the round was asked for by a refresh, which also ends the delay. It reports false when the
+// context ended.
 func (r *Reader) spreadWait(ctx context.Context) bool {
-	if r.cfg.DisableFetchSpread || r.cfg.FetchSpread <= 0 {
+	if r.cfg.DisableFetchSpread || r.cfg.FetchSpread <= 0 || r.requested {
 		return true
 	}
 
@@ -162,7 +163,10 @@ func (r *Reader) spreadWait(ctx context.Context) bool {
 		return true
 	}
 
-	return r.sleep(ctx, delay) == nil
+	// a refresh that arrives during the delay cuts it short: the caller waits for the generation
+	_, err := r.sleepOrRefresh(ctx, delay)
+
+	return err == nil
 }
 
 // pollResults is the sorted list of the poll counts.

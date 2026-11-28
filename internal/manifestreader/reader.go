@@ -80,6 +80,8 @@ type Reader struct {
 	// spread is set by accept when the manifest replaces a held one: the object fetches of that generation
 	// wait a random delay.
 	spread bool
+	// requested is set when the round that runs was asked for by [Reader.Refresh]: its fetches are not spread.
+	requested bool
 	// dirty is set when the state of a name changed since the last snapshot.
 	dirty bool
 }
@@ -235,10 +237,13 @@ func (r *Reader) Run(ctx context.Context) error {
 		result := r.roundResult(before)
 		r.refresh.complete(&result)
 
-		_, err := r.sleepOrRefresh(ctx, r.wait)
+		woken, err := r.sleepOrRefresh(ctx, r.wait)
 		if err != nil {
 			return nil
 		}
+
+		// a poll that someone asked for does not wait to spread the fetches: the caller waits for its result
+		r.requested = woken
 	}
 }
 

@@ -83,7 +83,12 @@ func NewStreamsWith(cfg *StreamsConfig) *Streams {
 	out.lane[1] = startLane(cfg.Labels, cfg.Label+"/sse", limit, func(change *flagruntime.Change) {
 		// a change that undid itself still tells the client to fetch again: it may have fetched the flag meanwhile
 		// the SSE service fails only when it can not encode its fixed event, it has nothing to tell the core
-		_ = out.sse.BroadcastFlagChanges(change.FlagSet, change.Diff)
+		var config stream.ConfigIdentity
+		if change.Config != nil {
+			config = stream.ConfigIdentity{ETag: change.Config.ETag, ModifiedAt: change.Config.ModifiedAt}
+		}
+
+		_ = out.sse.BroadcastConfigChange(change.FlagSet, config)
 	}, out.sse.Close)
 
 	return out

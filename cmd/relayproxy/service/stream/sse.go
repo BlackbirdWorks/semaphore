@@ -27,6 +27,9 @@ type SSEService interface {
 	// BroadcastFlagChanges sends an OFREP refetchEvaluation event to all clients
 	// subscribed to the given flagset stream.
 	BroadcastFlagChanges(flagsetName string, diff notifier.DiffCache) error
+	// BroadcastConfigChange is BroadcastFlagChanges for a change whose configuration is known: the event carries
+	// its identity, which a provider names in the re-fetch.
+	BroadcastConfigChange(flagsetName string, config ConfigIdentity) error
 	// ServeHTTP handles incoming SSE client connections. The request must
 	// carry a "stream" query parameter set to the target flagset name.
 	ServeHTTP(w http.ResponseWriter, r *http.Request)
@@ -96,11 +99,27 @@ func NewSSEService(opts ...Option) *SSEServiceImpl {
 // BroadcastFlagChanges only notifies that the flags changed, the diff is not sent:
 // providers re-fetch their evaluations when they receive the event.
 func (s *SSEServiceImpl) BroadcastFlagChanges(flagsetName string, _ notifier.DiffCache) error {
+	return s.BroadcastConfigChange(flagsetName, ConfigIdentity{ModifiedAt: clock.Now()})
+}
+
+// ConfigIdentity names the configuration of a flag set that a change leads to: the ETag the OFREP bulk evaluation
+// compares with the one a replica serves, and the date the configuration was built.
+type ConfigIdentity struct {
+	ModifiedAt time.Time
+	ETag       string
+}
+
+// BroadcastConfigChange sends the refetchEvaluation event with the identity of the configuration.
+func (s *SSEServiceImpl) BroadcastConfigChange(flagsetName string, config ConfigIdentity) error {
 	now := clock.Now()
+	if config.ModifiedAt.IsZero() {
+		config.ModifiedAt = now
+	}
 
 	data, err := json.Marshal(model.OFREPSSEEvent{
 		Type:         model.OFREPSSEEventTypeRefetchEvaluation,
-		LastModified: now.Unix(),
+		ETag:         config.ETag,
+		LastModified: config.ModifiedAt.Unix(),
 	})
 	if err != nil {
 		return fmt.Errorf("sse: failed to marshal OFREP event for stream %q: %w", flagsetName, err)

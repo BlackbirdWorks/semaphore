@@ -3,6 +3,7 @@ package flagruntime
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/blackbirdworks/semaphore/modules/core/flagdef"
 	"github.com/blackbirdworks/semaphore/notifier"
@@ -13,6 +14,8 @@ type Change struct {
 	// Diff lists the flags added, deleted and updated. A flag whose pointer is the same in both flag sets is not
 	// listed, so an unchanged flag costs nothing.
 	Diff notifier.DiffCache
+	// Config names the configuration the change leads to; nil when it is not known.
+	Config *ConfigIdentity
 	// FlagSet is the name of the flag set.
 	FlagSet string
 	// Generation is the generation of the swap that produced the last of the coalesced changes.
@@ -21,6 +24,15 @@ type Change struct {
 	Snapshot uint64
 	// Removed says that the flag set was withdrawn: every flag of the diff is deleted.
 	Removed bool
+}
+
+// ConfigIdentity names the configuration of a flag set: what a change notification tells a client, so that a replica
+// can tell whether it serves that configuration.
+type ConfigIdentity struct {
+	// ModifiedAt is the date the flag set was built ([FlagSet.ModifiedAt]).
+	ModifiedAt time.Time
+	// ETag is the identity of the content of the flag set ([FlagSet.ConfigETag]).
+	ETag string
 }
 
 // Rebuilt is a flag set that has a new pointer in a [Built]. Old is nil for a new flag set, and New is a
@@ -239,4 +251,5 @@ func compose(first, second *Change) {
 	first.Diff = states.diff()
 	first.Removed = second.Removed
 	first.Generation, first.Snapshot = second.Generation, second.Snapshot
+	first.Config = second.Config
 }

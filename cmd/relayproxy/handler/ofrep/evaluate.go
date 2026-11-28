@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/blackbirdworks/semaphore/cmd/relayproxy/configsync"
 	"github.com/blackbirdworks/semaphore/cmd/relayproxy/helper"
 	"github.com/blackbirdworks/semaphore/cmd/relayproxy/metric"
 	"github.com/blackbirdworks/semaphore/cmd/relayproxy/model"
@@ -25,6 +26,8 @@ import (
 
 // EvaluateCtrl serves the OFREP evaluation requests of the relay proxy.
 type EvaluateCtrl struct {
+	// configGate starts the control plane checks that a bulk evaluation naming a newer configuration asks for.
+	configGate     *configsync.Gate
 	flagsetManager service.FlagSetResolver
 	metrics        *metric.Metrics
 	eventStream    EventStream
@@ -52,6 +55,7 @@ func NewOFREPEvaluate(
 		flagsetManager: flagsetManager,
 		metrics:        metrics,
 		eventStream:    eventStream,
+		configGate:     new(configsync.Gate),
 	}
 	for _, opt := range opts {
 		opt(&ctrl)
@@ -151,6 +155,8 @@ func (h *EvaluateCtrl) Evaluate(w http.ResponseWriter, r *http.Request) error {
 		metadata = flagstate.WithSegmentStatus(metadata, flagValue.SegmentStatus)
 	}
 
+	metadata = documentMetadata(metadata, true)
+
 	return writeJSON(w, http.StatusOK, model.OFREPEvaluateSuccessResponse{
 		Key:      flagKey,
 		Value:    ofrepValue(flagValue.Reason, flagValue.Value),
@@ -194,6 +200,15 @@ func (h *EvaluateCtrl) BulkEvaluate(w http.ResponseWriter, r *http.Request) erro
 		return fmt.Errorf("getting the flag set of the bulk evaluation: %w", flagSetError(httpErr))
 	}
 
+	if target, named := configsync.FromRequest(r); named && h.behind(flagset, target) && h.checkControlPlane(ctx) {
+		// the authentication of the request resolved the flag set it holds: look it up again, in the runtime that
+		// the check left
+		fresh, freshErr := helper.FlagSet(h.flagsetManager, helper.APIKey(r))
+		if freshErr == nil {
+			flagset = fresh
+		}
+	}
+
 	var allFlagsResp flagstate.AllFlags
 	if len(evalCtx.ExtractGOFFProtectedFields().FlagList) > 0 {
 		// if we have a list of flags to evaluate in the evaluation context, we evaluate only those flags.
@@ -234,6 +249,24 @@ func (h *EvaluateCtrl) BulkEvaluate(w http.ResponseWriter, r *http.Request) erro
 	}
 
 	return writeJSON(w, http.StatusOK, response)
+}
+
+// behind reports whether the flag set serves another configuration than the one the request names (the
+// flagConfigEtag and flagConfigLastModified parameters): a client that was told of a newer configuration must not be
+// answered from an older one.
+func (*EvaluateCtrl) behind(flagset service.FlagSet, target configsync.Target) bool {
+	versioned, ok := flagset.(service.ConfigVersioned)
+
+	return ok && target.Behind(versioned)
+}
+
+// checkControlPlane makes the relay check its control plane, bounded (see [configsync.Wait]) and rate limited (see
+// [configsync.MinInterval]), and reports whether it waited for a check. Whatever the check finds, the request is
+// answered with the flag set the relay serves afterwards: never an error.
+func (h *EvaluateCtrl) checkControlPlane(ctx context.Context) bool {
+	refresher, ok := h.flagsetManager.(service.Refresher)
+
+	return ok && h.configGate.CheckNow(ctx, refresher)
 }
 
 // ofrepSSEPath is the path of the relay proxy endpoint streaming flag changes over SSE.
@@ -391,8 +424,8 @@ func writeJSON(w http.ResponseWriter, code int, v any) error {
 // not changed.
 func (h *EvaluateCtrl) bulkMetadata(val *flagstate.FlagState) map[string]any {
 	if h.legacyMetadataOnly {
-		return val.Metadata
+		return documentMetadata(val.Metadata, false)
 	}
 
-	return val.MetadataWithStatus()
+	return documentMetadata(val.MetadataWithStatus(), false)
 }
