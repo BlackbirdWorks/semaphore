@@ -118,9 +118,10 @@ func TestOFREPConformance(t *testing.T) {
 		"bulk":      conformanceBulk,
 		"reasons":   conformanceReasons,
 		"wire":      conformanceWire,
-		"etag":      conformanceBulkETag,
+		"bulk-etag": conformanceBulkETag,
 		"scenarios": conformanceScenarios,
 		"stream":    conformanceEventStreams,
+		"sequences": conformanceSequences,
 	}
 
 	for name, fn := range cases {

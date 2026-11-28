@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,9 +22,11 @@ import (
 	"github.com/blackbirdworks/semaphore/cmd/relayproxy/bootstrap"
 	"github.com/blackbirdworks/semaphore/cmd/relayproxy/corehttp"
 	"github.com/blackbirdworks/semaphore/cmd/relayproxy/flagruntime"
+	"github.com/blackbirdworks/semaphore/cmd/relayproxy/handler/ofrep"
 	"github.com/blackbirdworks/semaphore/cmd/relayproxy/metric"
 	"github.com/blackbirdworks/semaphore/cmd/relayproxy/relaycore"
 	"github.com/blackbirdworks/semaphore/cmdhelpers/cmdlog"
+	"github.com/blackbirdworks/semaphore/modules/core/testhelpers/clocktest"
 )
 
 const (
@@ -86,7 +89,7 @@ func startRelayAt(t *testing.T, cfgPath string, mutate func(*bootstrap.Config)) 
 		mutate(cfg)
 	}
 
-	return startRelayFromConfig(t, cfg, load)
+	return startRelayFromConfig(t, cfg, load, false, 1)
 }
 
 // startRelayWithFlags starts an in-process relay proxy serving the provided flags YAML document.
@@ -112,7 +115,7 @@ func startRelayWithFlagSet(t *testing.T, flagsYAML string, keyed bool) string {
 	require.NotNil(t, conn.File)
 	conn.File.Path = storeDir
 
-	return startRelayFromConfig(t, cfg, load)
+	return startRelayFromConfig(t, cfg, load, false, 1)
 }
 
 func writeTempFlagStore(t *testing.T, flagsYAML string, keyed bool) string {
@@ -160,7 +163,11 @@ func writeTempFlagStore(t *testing.T, flagsYAML string, keyed bool) string {
 	return storeDir
 }
 
-func startRelayFromConfig(t *testing.T, cfg *bootstrap.Config, load bootstrap.LoadOptions) string {
+// startRelayFromConfig starts the relay of the configuration and waits until it serves the generation. With
+// selfStream it advertises its own address as the flag change stream of the bulk evaluation.
+func startRelayFromConfig(
+	t *testing.T, cfg *bootstrap.Config, load bootstrap.LoadOptions, selfStream bool, generation int,
+) string {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -213,6 +220,7 @@ func startRelayFromConfig(t *testing.T, cfg *bootstrap.Config, load bootstrap.Lo
 	core, err = relaycore.New(ctx, cfg, &relaycore.Deps{
 		Registerer: metrics.Registry,
 		Broadcast:  streams.Broadcast,
+		Now:        buildClock(),
 		Secrets:    load,
 		Hooks: flagruntime.Hooks{AfterRound: func(res flagruntime.RoundResult) {
 			select {
@@ -228,6 +236,11 @@ func startRelayFromConfig(t *testing.T, cfg *bootstrap.Config, load bootstrap.Lo
 
 	settings.Host = "127.0.0.1"
 	settings.Port = tcpAddr.Port
+
+	if selfStream {
+		settings.OfrepEventStream, err = ofrep.NewEventStream(fmt.Sprintf("http://127.0.0.1:%d", tcpAddr.Port), 0)
+		require.NoError(t, err)
+	}
 
 	logger := cmdlog.NewDefault(cmdlog.WithWriter(io.Discard)).Slog
 	ready := corehttp.NewReadiness(core)
@@ -246,7 +259,7 @@ func startRelayFromConfig(t *testing.T, cfg *bootstrap.Config, load bootstrap.Lo
 	loops.Go(func() { _ = core.Run(ctx) })
 	loops.Go(func() { server.StartWithContext(ctx) })
 
-	waitFirstGeneration(t, rounds)
+	waitGeneration(t, rounds, uint64(generation))
 
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", tcpAddr.Port)
 	waitReadyz(t, baseURL)
@@ -254,7 +267,7 @@ func startRelayFromConfig(t *testing.T, cfg *bootstrap.Config, load bootstrap.Lo
 	return baseURL
 }
 
-func waitFirstGeneration(t *testing.T, rounds <-chan flagruntime.RoundResult) {
+func waitGeneration(t *testing.T, rounds <-chan flagruntime.RoundResult, generation uint64) {
 	t.Helper()
 
 	timer := time.NewTimer(relayReadyTimeout)
@@ -263,15 +276,15 @@ func waitFirstGeneration(t *testing.T, rounds <-chan flagruntime.RoundResult) {
 	for {
 		select {
 		case res := <-rounds:
-			if res.Generation != 1 {
+			if res.Generation != generation {
 				continue
 			}
 
-			require.Equal(t, flagruntime.OutcomeApplied, res.Outcome, "relay rejected test flag store")
+			require.Equal(t, flagruntime.OutcomeApplied, res.Outcome, "relay rejected the flag store")
 
 			return
 		case <-timer.C:
-			require.FailNow(t, "timed out waiting for relay generation 1 to apply")
+			require.FailNow(t, "timed out waiting for the relay to apply its first generation")
 		}
 	}
 }
@@ -310,5 +323,15 @@ func waitReadyz(t *testing.T, baseURL string) {
 			)
 		case <-timer.C:
 		}
+	}
+}
+
+// buildClock dates the flag sets of a relay: every build of the relay is a minute after its previous one, so that a
+// relay that loaded fewer generations has an older configuration (the process clock of the tests is frozen).
+func buildClock() func() time.Time {
+	var builds atomic.Int64
+
+	return func() time.Time {
+		return clocktest.Instant().Add(time.Duration(builds.Add(1)) * time.Minute)
 	}
 }

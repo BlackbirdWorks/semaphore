@@ -27,6 +27,24 @@ const (
 	schemaNotFound  = "flagNotFound"
 )
 
+// The kinds of requirement identifiers, as [KindOf] returns them.
+const (
+	KindResponse = kindResponse
+	KindHeader   = kindHeader
+	KindSchema   = kindSchema
+	KindParam    = kindParam
+	KindSecurity = kindSecurity
+	KindBranch   = kindBranch
+	KindEnum     = kindEnum
+)
+
+// KindOf returns the kind of a requirement identifier: one of the Kind constants.
+func KindOf(id string) string {
+	kind, _, _ := strings.Cut(id, " ")
+
+	return kind
+}
+
 // ResponseID identifies a documented response: operation and status code.
 func ResponseID(method, path string, status int) string {
 	return fmt.Sprintf("%s %s %s %d", kindResponse, strings.ToUpper(method), path, status)

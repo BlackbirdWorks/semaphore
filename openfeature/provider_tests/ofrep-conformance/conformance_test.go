@@ -335,20 +335,22 @@ func runSingleFlagCase(
 		headers = map[string]string{headerXAPIKey: validToken}
 	}
 
-	status, hdrs, body := hns.post(
+	res := hns.post(
 		t,
 		testCase.targetURL+"/ofrep/v1/evaluate/flags/"+testCase.flagKey,
 		headers,
 		testCase.body,
 	)
-	assert.Equal(t, testCase.wantStatus, status, "body: %s", string(body))
+	res.wantStatus(t, testCase.wantStatus)
 
-	valErr := spec.ValidateResponse(singleFlagPath, http.MethodPost, status, hdrs, body)
-	require.NoError(t, valErr, "body: %s", string(body))
+	valErr := spec.ValidateResponse(singleFlagPath, http.MethodPost, res.status, res.header, res.body)
+	require.NoError(t, valErr, "body: %s", string(res.body))
 
 	if len(testCase.wantFields) > 0 || len(testCase.wantAbsentFields) > 0 {
 		var parsed map[string]any
-		require.NoError(t, json.Unmarshal(body, &parsed))
+		require.NoError(t, json.Unmarshal(res.body, &parsed))
+
+		defer res.bodyAsserted()
 
 		for key, want := range testCase.wantFields {
 			got, exists := parsed[key]
@@ -500,38 +502,39 @@ func conformanceBulk(t *testing.T, hns *harness) {
 		t.Parallel()
 
 		authHdr := map[string]string{headerXAPIKey: validToken}
-		status, hdrs, body := hns.post(t, baseURL+bulkFlagsPath, authHdr, activeFlagListCtx)
-		require.Equal(t, http.StatusOK, status, "body: %s", string(body))
-		require.NoError(t, spec.ValidateResponse(bulkFlagsPath, http.MethodPost, status, hdrs, body))
-		assertActiveBulkFlags(t, body)
+		res := hns.post(t, baseURL+bulkFlagsPath, authHdr, activeFlagListCtx)
+		res.wantStatus(t, http.StatusOK)
+		require.NoError(t, spec.ValidateResponse(bulkFlagsPath, http.MethodPost, res.status, res.header, res.body))
+		assertActiveBulkFlags(t, res.body)
+		res.bodyAsserted()
 
-		etag := hdrs.Get("ETag")
-		require.NotEmpty(t, etag)
+		etag := res.header.Get("ETag")
+		res.wantStrongETag(t)
 
-		status304, hdrs304, body304 := hns.postRaw(
+		notModified := hns.postRaw(
 			t, baseURL+bulkFlagsPath,
 			map[string]string{headerXAPIKey: validToken, headerIfNoneMatch: etag}, activeFlagListCtx,
 		)
-		assert.Equal(t, http.StatusNotModified, status304, "body: %s", string(body304))
-		assert.Empty(t, body304)
-		assert.Equal(t, etag, hdrs304.Get("ETag"))
-		require.NoError(t, spec.ValidateResponse(bulkFlagsPath, http.MethodPost, status304, hdrs304, body304))
+		notModified.wantStatus(t, http.StatusNotModified)
+		assert.Empty(t, notModified.body)
+		notModified.wantETag(t, etag)
+		require.NoError(t, spec.ValidateResponse(bulkFlagsPath, http.MethodPost, notModified.status,
+			notModified.header, notModified.body))
 
-		statusWeak, hdrsWeak, bodyWeak := hns.postRaw(
+		weak := hns.postRaw(
 			t, baseURL+bulkFlagsPath,
 			map[string]string{headerXAPIKey: validToken, headerIfNoneMatch: "W/" + etag}, activeFlagListCtx,
 		)
-		assert.Equal(t, http.StatusNotModified, statusWeak, "body: %s", string(bodyWeak))
-		assert.Empty(t, bodyWeak)
-		require.NoError(t, spec.ValidateResponse(bulkFlagsPath, http.MethodPost, statusWeak, hdrsWeak, bodyWeak))
+		weak.wantStatus(t, http.StatusNotModified)
+		assert.Empty(t, weak.body)
 
-		statusStale, hdrsStale, bodyStale := hns.post(
+		stale := hns.post(
 			t, baseURL+bulkFlagsPath,
 			map[string]string{headerXAPIKey: validToken, headerIfNoneMatch: `"stale"`}, activeFlagListCtx,
 		)
-		assert.Equal(t, http.StatusOK, statusStale)
-		require.NoError(t, spec.ValidateResponse(bulkFlagsPath, http.MethodPost, statusStale, hdrsStale, bodyStale))
-		assertActiveBulkFlags(t, bodyStale)
+		stale.wantStatus(t, http.StatusOK)
+		assertActiveBulkFlags(t, stale.body)
+		stale.wantETag(t, etag)
 	})
 
 	activeFlagKeys := []string{flagBoolMatch, flagStringKey, flagIntegerKey, flagDoubleKey, flagObjectKey}
@@ -630,11 +633,12 @@ func conformanceBulk(t *testing.T, hns *harness) {
 				headers = map[string]string{headerXAPIKey: validToken}
 			}
 
-			status, hdrs, body := hns.post(t, tt.targetURL+bulkFlagsPath, headers, tt.body)
-			assert.Equal(t, tt.wantStatus, status, "body: %s", string(body))
+			res := hns.post(t, tt.targetURL+bulkFlagsPath, headers, tt.body)
+			res.wantStatus(t, tt.wantStatus)
 
-			valErr := spec.ValidateResponse(bulkFlagsPath, http.MethodPost, status, hdrs, body)
-			assertBulkValidResponse(t, body, valErr, tt)
+			valErr := spec.ValidateResponse(bulkFlagsPath, http.MethodPost, res.status, res.header, res.body)
+			assertBulkValidResponse(t, res.body, valErr, tt)
+			res.bodyAsserted()
 		})
 	}
 }
@@ -772,17 +776,20 @@ disabled_flag:
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			status, respHdrs, body := hns.post(
+			single := hns.post(
 				t,
 				baseURL+"/ofrep/v1/evaluate/flags/"+tt.flagKey,
 				hdrs,
 				tt.contextJSON,
 			)
-			assert.Equal(t, tt.wantStatus, status, "body: %s", string(body))
-			require.NoError(t, spec.ValidateResponse(singleFlagPath, http.MethodPost, status, respHdrs, body))
+			single.wantStatus(t, tt.wantStatus)
+			require.NoError(t, spec.ValidateResponse(singleFlagPath, http.MethodPost, single.status, single.header,
+				single.body))
 
 			var singleParsed map[string]any
-			require.NoError(t, json.Unmarshal(body, &singleParsed))
+			require.NoError(t, json.Unmarshal(single.body, &singleParsed))
+
+			defer single.bodyAsserted()
 
 			if tt.wantReason != "" {
 				assert.Equal(t, tt.wantReason, singleParsed[jsonReasonField])
@@ -796,11 +803,14 @@ disabled_flag:
 				assert.NotContains(t, singleParsed, jsonValueField)
 			}
 
-			bulkStatus, bulkHdrs, bulkBody := hns.post(t, baseURL+bulkFlagsPath, hdrs, tt.contextJSON)
-			assert.Equal(t, http.StatusOK, bulkStatus, "body: %s", string(bulkBody))
-			require.NoError(t, spec.ValidateResponse(bulkFlagsPath, http.MethodPost, bulkStatus, bulkHdrs, bulkBody))
+			bulk := hns.post(t, baseURL+bulkFlagsPath, hdrs, tt.contextJSON)
+			bulk.wantStatus(t, http.StatusOK)
+			require.NoError(t, spec.ValidateResponse(bulkFlagsPath, http.MethodPost, bulk.status, bulk.header,
+				bulk.body))
 
-			flags := parseBulkFlags(t, bulkBody)
+			defer bulk.bodyAsserted()
+
+			flags := parseBulkFlags(t, bulk.body)
 			entry, ok := flags[tt.flagKey]
 			require.True(t, ok, "missing flag %q in bulk response", tt.flagKey)
 			assert.Equal(t, tt.wantBulkReason, entry[jsonReasonField])

@@ -46,6 +46,12 @@ func WithWithdrawnCap(size int) Option {
 	return func(e *Engine) { e.withdrawnCap = size }
 }
 
+// WithNow sets the clock that dates the flag sets a build creates ([FlagSet.ModifiedAt]); the default is
+// [clock.Now].
+func WithNow(now func() time.Time) Option {
+	return func(e *Engine) { e.now = now }
+}
+
 // WithHooks sets the hooks.
 func WithHooks(hooks Hooks) Option {
 	return func(e *Engine) { e.hooks = hooks }
@@ -134,6 +140,7 @@ type Engine struct {
 	collided   map[string]struct{}
 	// roundRejected is the rejection of the content of the round, when it was rejected: the decision of its revision.
 	roundRejected *Reload
+	now           func() time.Time
 	nextCollided  []string
 	taken         atomic.Uint64
 	withdrawnCap  int
@@ -171,6 +178,7 @@ func NewEngine(logger *slog.Logger, svc *flagdef.Service, holder *Holder, opts .
 	eng.changes = make(chan Change, eng.changeBuf)
 	eng.builder = NewBuilder(svc, BuilderOptions{
 		OnParse: eng.hooks.OnParse, WithdrawnCap: eng.withdrawnCap, SegmentStores: eng.stores, Segments: eng.segEnv,
+		Now: eng.now,
 	})
 	eng.snapshot = eng.cur.Snapshot
 
@@ -807,6 +815,7 @@ func (e *Engine) enqueue(built *Built, next *Runtime) (int, reloadStats) {
 		change := Change{
 			FlagSet: item.Name, Diff: diffFlagSets(item.Old, item.New), Removed: item.New.State == StateWithdrawn,
 			Generation: next.Generation, Snapshot: next.Snapshot,
+			Config: &ConfigIdentity{ModifiedAt: item.New.ModifiedAt, ETag: item.New.ConfigETag()},
 		}
 
 		stats.tally(item, &change.Diff)

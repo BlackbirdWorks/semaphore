@@ -229,10 +229,11 @@ type view struct {
 }
 
 var (
-	_ service.FlagSet       = (*view)(nil)
-	_ service.EventAcceptor = (*view)(nil)
-	_ service.FlagChanger   = (*view)(nil)
-	_ service.SegmentUser   = (*view)(nil)
+	_ service.FlagSet         = (*view)(nil)
+	_ service.EventAcceptor   = (*view)(nil)
+	_ service.FlagChanger     = (*view)(nil)
+	_ service.SegmentUser     = (*view)(nil)
+	_ service.ConfigVersioned = (*view)(nil)
 )
 
 // RawVariation evaluates one flag.
@@ -274,6 +275,12 @@ func (v *view) GetFlagsFromCacheWithContext(_ context.Context) (map[string]flagd
 
 // GetCacheRefreshDate is the date the flag set was last modified.
 func (v *view) GetCacheRefreshDate() time.Time { return v.set.ModifiedAt }
+
+// ConfigETag is the identity of the configuration of the flag set.
+func (v *view) ConfigETag() string { return v.set.ConfigETag() }
+
+// ConfigModified is the date the configuration of the flag set was built.
+func (v *view) ConfigModified() time.Time { return v.set.ModifiedAt }
 
 // GetEvaluationContextEnrichment returns a copy of the enrichment of the flag set.
 func (v *view) GetEvaluationContextEnrichment() map[string]any {

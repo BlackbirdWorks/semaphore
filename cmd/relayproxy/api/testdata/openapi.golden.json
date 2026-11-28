@@ -818,6 +818,12 @@
       "OFREPSSEEvent": {
         "additionalProperties": false,
         "properties": {
+          "etag": {
+            "examples": [
+              "3f9a1c"
+            ],
+            "type": "string"
+          },
           "lastModified": {
             "examples": [
               1771622898

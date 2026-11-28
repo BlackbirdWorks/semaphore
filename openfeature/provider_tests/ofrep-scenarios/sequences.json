@@ -1,0 +1,210 @@
+{
+ "description": "Language neutral sequences of the OFREP behaviour of the relay that need time: a store that changes, relays that follow it (one can be held back), a change stream. A sequence declares the flag documents it publishes, the relays that follow the store (default: one relay named a that polls every second), the flag sets of the first generation, and steps. Steps: request (relay, key sent as X-API-Key, context by name, single flag key or the bulk evaluation, query parameters, ifNoneMatch, save the response as a variable, eventually: repeat until the expectation holds, then assert it), publish (the next generation of the store), connect (open the flag change stream that a bulk response advertises), event (the next refetchEvaluation event of a stream, saved as a variable). Variables: $name is the ETag of a saved response, $name.etag and $name.lastModified are the fields of a saved event. Expectations: status, etag (present, same:name, differs:name), emptyBody, values (flag key to value), absent (flag keys that must not be in the bulk response), noValue (flags with no value), reasons, errorCode, eventStreams (url: one entry of type sse with a url and no endpoint), metadata (absent: no response level metadata), flagMetadata (flag key to the metadata entries it must contain). source: spec (the pinned document or ADR-0008), provider (an official provider relies on it), relay (behaviour neither defines); basis says why.",
+ "documents": {
+  "v1": "greeting:\n  variations: {hello: \"hello\", hi: \"hi\"}\n  defaultRule: {variation: hello}\nplan:\n  variations: {pro: \"pro-text\", free: \"free-text\"}\n  targeting:\n    - name: pro-users\n      query: plan eq \"pro\"\n      variation: pro\n  defaultRule: {variation: free}\nother:\n  variations: {x: \"x\"}\n  defaultRule: {variation: x}\n",
+  "v2-greeting-changed": "greeting:\n  variations: {hello: \"hello\", hi: \"hi\"}\n  defaultRule: {variation: hi}\nplan:\n  variations: {pro: \"pro-text\", free: \"free-text\"}\n  targeting:\n    - name: pro-users\n      query: plan eq \"pro\"\n      variation: pro\n  defaultRule: {variation: free}\nother:\n  variations: {x: \"x\"}\n  defaultRule: {variation: x}\n",
+  "v3-other-removed": "greeting:\n  variations: {hello: \"hello\", hi: \"hi\"}\n  defaultRule: {variation: hello}\nplan:\n  variations: {pro: \"pro-text\", free: \"free-text\"}\n  targeting:\n    - name: pro-users\n      query: plan eq \"pro\"\n      variation: pro\n  defaultRule: {variation: free}\n",
+  "v4-greeting-disabled": "greeting:\n  variations: {hello: \"hello\", hi: \"hi\"}\n  defaultRule: {variation: hello}\n  disable: true\nplan:\n  variations: {pro: \"pro-text\", free: \"free-text\"}\n  targeting:\n    - name: pro-users\n      query: plan eq \"pro\"\n      variation: pro\n  defaultRule: {variation: free}\nother:\n  variations: {x: \"x\"}\n  defaultRule: {variation: x}\n",
+  "v5-pro-text-changed": "greeting:\n  variations: {hello: \"hello\", hi: \"hi\"}\n  defaultRule: {variation: hello}\nplan:\n  variations: {pro: \"pro-text-2\", free: \"free-text\"}\n  targeting:\n    - name: pro-users\n      query: plan eq \"pro\"\n      variation: pro\n  defaultRule: {variation: free}\nother:\n  variations: {x: \"x\"}\n  defaultRule: {variation: x}\n",
+  "v6-flag-added": "greeting:\n  variations: {hello: \"hello\", hi: \"hi\"}\n  defaultRule: {variation: hello}\nplan:\n  variations: {pro: \"pro-text\", free: \"free-text\"}\n  targeting:\n    - name: pro-users\n      query: plan eq \"pro\"\n      variation: pro\n  defaultRule: {variation: free}\nother:\n  variations: {x: \"x\"}\n  defaultRule: {variation: x}\nextra:\n  variations: {e: true}\n  defaultRule: {variation: e}\n",
+  "v7-metadata": "greeting:\n  variations: {hello: \"hello\", hi: \"hi\"}\n  defaultRule: {variation: hello}\nwith_metadata:\n  variations: {on: true}\n  defaultRule: {variation: on}\n  metadata: {team: payments, revision: 3, experimental: false}\n",
+  "iso-a": "shared:\n  variations: {v: \"a-value\"}\n  defaultRule: {variation: v}\nonly_a:\n  variations: {v: true}\n  defaultRule: {variation: v}\n",
+  "iso-b": "shared:\n  variations: {v: \"b-value\"}\n  defaultRule: {variation: v}\nonly_b:\n  variations: {v: true}\n  defaultRule: {variation: v}\n",
+  "iso-public": "shared:\n  variations: {v: \"public-value\"}\n  defaultRule: {variation: v}\nonly_public:\n  variations: {v: true}\n  defaultRule: {variation: v}\n"
+ },
+ "contexts": {
+  "free": {"targetingKey": "u1", "plan": "free"},
+  "free-other-user": {"targetingKey": "u2", "plan": "free"},
+  "pro": {"targetingKey": "u3", "plan": "pro"},
+  "free-greeting-only": {"targetingKey": "u1", "plan": "free", "semaphore": {"flagList": ["greeting"]}},
+  "free-plan-only": {"targetingKey": "u1", "plan": "free", "semaphore": {"flagList": ["plan"]}}
+ },
+ "sequences": [
+  {
+   "name": "bulk ETag: the same context twice, and If-None-Match",
+   "source": "spec",
+   "basis": "bulkEvaluation 200 ETag: entity tag of the current state of all flags, sent back in If-None-Match; 304: the ETag matches, no body",
+   "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}],
+   "steps": [
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "save": "t1", "expect": {"status": 200, "etag": "present", "values": {"greeting": "hello", "plan": "free-text", "other": "x"}}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "expect": {"status": 200, "etag": "same:t1"}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$t1", "expect": {"status": 304, "etag": "same:t1", "emptyBody": true}}
+   ]
+  },
+  {
+   "name": "bulk ETag: a flag value changed and published",
+   "source": "spec",
+   "basis": "the ETag represents the current state of the flags: a changed value is a new state, the old tag no longer validates",
+   "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}],
+   "steps": [
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "save": "t1", "expect": {"status": 200}},
+    {"do": "publish", "store": [{"name": "set-a", "document": "v2-greeting-changed", "keys": ["key-a"]}]},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "eventually": true, "expect": {"status": 200, "values": {"greeting": "hi"}}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$t1", "save": "t2", "expect": {"status": 200, "etag": "differs:t1", "values": {"greeting": "hi"}}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$t1", "expect": {"status": 200, "etag": "same:t2"}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$t2", "expect": {"status": 304, "etag": "same:t2", "emptyBody": true}}
+   ]
+  },
+  {
+   "name": "bulk ETag: a change that cannot affect the result of this context keeps the tag",
+   "source": "relay",
+   "basis": "the ETag is the hash of the response body, so it changes if and only if the result for the context changes; a rule change for another plan does not change a free user's result",
+   "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}],
+   "steps": [
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "save": "t1", "expect": {"status": 200}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "pro", "save": "pro1", "expect": {"status": 200, "values": {"plan": "pro-text"}}},
+    {"do": "publish", "store": [{"name": "set-a", "document": "v5-pro-text-changed", "keys": ["key-a"]}]},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "pro", "eventually": true, "expect": {"status": 200, "values": {"plan": "pro-text-2"}}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "pro", "ifNoneMatch": "$pro1", "expect": {"status": 200, "etag": "differs:pro1"}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$t1", "expect": {"status": 304, "etag": "same:t1", "emptyBody": true}}
+   ]
+  },
+  {
+   "name": "bulk ETag: a change outside the requested flag list keeps the tag",
+   "source": "relay",
+   "basis": "the tag follows the response body: a bulk request for a list of flags does not change when another flag is removed",
+   "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}],
+   "steps": [
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free-greeting-only", "save": "t1", "expect": {"status": 200, "values": {"greeting": "hello"}, "absent": ["other", "plan"]}},
+    {"do": "publish", "store": [{"name": "set-a", "document": "v3-other-removed", "keys": ["key-a"]}]},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "eventually": true, "expect": {"status": 200, "absent": ["other"]}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free-greeting-only", "ifNoneMatch": "$t1", "expect": {"status": 304, "etag": "same:t1", "emptyBody": true}}
+   ]
+  },
+  {
+   "name": "bulk ETag: another flag set changing, and a reload with no change for this one",
+   "source": "relay",
+   "basis": "a generation that changes flag set b only leaves the configuration of flag set a, and so its tag, as it was",
+   "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}, {"name": "set-b", "document": "v1", "keys": ["key-b"]}],
+   "steps": [
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "save": "ta", "expect": {"status": 200}},
+    {"do": "request", "relay": "a", "key": "key-b", "context": "free", "save": "tb", "expect": {"status": 200, "values": {"greeting": "hello"}}},
+    {"do": "publish", "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}, {"name": "set-b", "document": "v2-greeting-changed", "keys": ["key-b"]}]},
+    {"do": "request", "relay": "a", "key": "key-b", "context": "free", "eventually": true, "expect": {"status": 200, "values": {"greeting": "hi"}}},
+    {"do": "request", "relay": "a", "key": "key-b", "context": "free", "ifNoneMatch": "$tb", "expect": {"status": 200, "etag": "differs:tb"}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$ta", "expect": {"status": 304, "etag": "same:ta", "emptyBody": true}}
+   ]
+  },
+  {
+   "name": "bulk ETag: a tag of one context never validates another context whose result differs",
+   "source": "spec",
+   "basis": "304 only when the ETag matches the current state of what this request would return",
+   "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}],
+   "steps": [
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "save": "tfree", "expect": {"status": 200, "values": {"plan": "free-text"}}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "pro", "ifNoneMatch": "$tfree", "save": "tpro", "expect": {"status": 200, "etag": "differs:tfree", "values": {"plan": "pro-text"}}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free-other-user", "ifNoneMatch": "$tfree", "expect": {"status": 304, "etag": "same:tfree", "emptyBody": true}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$tpro", "expect": {"status": 200, "etag": "same:tfree"}}
+   ]
+  },
+  {
+   "name": "bulk ETag: a disabled flag, and a removed flag",
+   "source": "spec",
+   "basis": "a disabled flag has the reason DISABLED and no value; both are new states of the flags",
+   "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}],
+   "steps": [
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "save": "t1", "expect": {"status": 200, "values": {"greeting": "hello"}}},
+    {"do": "publish", "store": [{"name": "set-a", "document": "v4-greeting-disabled", "keys": ["key-a"]}]},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "eventually": true, "expect": {"status": 200, "reasons": {"greeting": "DISABLED"}}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$t1", "save": "t2", "expect": {"status": 200, "etag": "differs:t1", "reasons": {"greeting": "DISABLED"}, "noValue": ["greeting"]}},
+    {"do": "publish", "store": [{"name": "set-a", "document": "v3-other-removed", "keys": ["key-a"]}]},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "eventually": true, "expect": {"status": 200, "absent": ["other"]}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$t2", "expect": {"status": 200, "etag": "differs:t2", "absent": ["other"]}}
+   ]
+  },
+  {
+   "name": "flag sets are isolated, single and bulk",
+   "source": "spec",
+   "basis": "a key reaches the flags of its flag set only; an unknown flag is 404 FLAG_NOT_FOUND; 401 for credentials that do not authenticate, 403 for a key that may not evaluate",
+   "relays": {"a": {"poll": "1s", "adminKeys": ["admin-key"]}},
+   "store": [{"name": "set-a", "document": "iso-a", "keys": ["key-a"]}, {"name": "set-b", "document": "iso-b", "keys": ["key-b"]}, {"name": "open", "document": "iso-public", "keys": []}],
+   "steps": [
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "save": "ta", "expect": {"status": 200, "values": {"shared": "a-value", "only_a": true}, "absent": ["only_b", "only_public"]}},
+    {"do": "request", "relay": "a", "key": "key-b", "context": "free", "save": "tb", "expect": {"status": 200, "values": {"shared": "b-value", "only_b": true}, "absent": ["only_a", "only_public"]}},
+    {"do": "request", "relay": "a", "key": "", "context": "free", "save": "tp", "expect": {"status": 200, "values": {"shared": "public-value", "only_public": true}, "absent": ["only_a", "only_b"]}},
+    {"do": "request", "relay": "a", "key": "key-b", "context": "free", "ifNoneMatch": "$ta", "expect": {"status": 200, "etag": "same:tb"}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$tb", "expect": {"status": 200, "etag": "same:ta"}},
+    {"do": "request", "relay": "a", "key": "", "context": "free", "ifNoneMatch": "$ta", "expect": {"status": 200, "etag": "same:tp"}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$tp", "expect": {"status": 200, "etag": "same:ta"}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "single": "only_b", "expect": {"status": 404, "errorCode": "FLAG_NOT_FOUND"}},
+    {"do": "request", "relay": "a", "key": "key-b", "context": "free", "single": "only_a", "expect": {"status": 404, "errorCode": "FLAG_NOT_FOUND"}},
+    {"do": "request", "relay": "a", "key": "", "context": "free", "single": "only_a", "expect": {"status": 404, "errorCode": "FLAG_NOT_FOUND"}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "single": "shared", "expect": {"status": 200, "values": {"shared": "a-value"}}},
+    {"do": "request", "relay": "a", "key": "key-b", "context": "free", "single": "shared", "expect": {"status": 200, "values": {"shared": "b-value"}}},
+    {"do": "request", "relay": "a", "key": "", "context": "free", "single": "shared", "expect": {"status": 200, "values": {"shared": "public-value"}}},
+    {"do": "request", "relay": "a", "key": "admin-key", "context": "free", "expect": {"status": 403}},
+    {"do": "request", "relay": "a", "key": "admin-key", "context": "free", "single": "shared", "expect": {"status": 403}},
+    {"do": "request", "relay": "a", "key": "no-such-key", "context": "free", "expect": {"status": 401}},
+    {"do": "request", "relay": "a", "key": "no-such-key", "context": "free", "single": "shared", "expect": {"status": 401}}
+   ]
+  },
+  {
+   "name": "a replica that is behind answers a change-triggered refetch from the new configuration",
+   "source": "spec",
+   "basis": "ADR-0008: flagConfigEtag and flagConfigLastModified carry what the change notification said and are sent only on a refetch it triggered, for server side cache validation and freshness; the JavaScript providers send them with If-None-Match",
+   "relays": {"a": {"poll": "1s", "stream": true}, "b": {"poll": "1h"}},
+   "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}],
+   "steps": [
+    {"do": "request", "relay": "b", "key": "key-a", "context": "free", "save": "tb1", "expect": {"status": 200, "values": {"greeting": "hello"}}},
+    {"do": "connect", "relay": "a", "key": "key-a", "stream": "s1"},
+    {"do": "publish", "store": [{"name": "set-a", "document": "v2-greeting-changed", "keys": ["key-a"]}]},
+    {"do": "event", "stream": "s1", "save": "ev"},
+    {"do": "request", "relay": "b", "key": "key-a", "context": "free", "ifNoneMatch": "$tb1", "expect": {"status": 304, "etag": "same:tb1", "emptyBody": true}},
+    {"do": "request", "relay": "b", "key": "key-a", "context": "free", "ifNoneMatch": "$tb1", "query": {"flagConfigEtag": "$ev.etag", "flagConfigLastModified": "$ev.lastModified"}, "save": "tb2", "expect": {"status": 200, "etag": "differs:tb1", "values": {"greeting": "hi"}}},
+    {"do": "request", "relay": "b", "key": "key-a", "context": "free", "ifNoneMatch": "$tb2", "query": {"flagConfigEtag": "$ev.etag", "flagConfigLastModified": "$ev.lastModified"}, "expect": {"status": 304, "etag": "same:tb2", "emptyBody": true}}
+   ]
+  },
+  {
+   "name": "a replica that is behind, notified with the date only",
+   "source": "spec",
+   "basis": "flagConfigLastModified is sent alone when the notification had no etag; the replica compares it with the date it built its configuration",
+   "relays": {"a": {"poll": "1s", "stream": true}, "b": {"poll": "1h"}},
+   "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}],
+   "steps": [
+    {"do": "request", "relay": "b", "key": "key-a", "context": "free", "save": "tb1", "expect": {"status": 200, "values": {"greeting": "hello"}}},
+    {"do": "connect", "relay": "a", "key": "key-a", "stream": "s1"},
+    {"do": "publish", "store": [{"name": "set-a", "document": "v2-greeting-changed", "keys": ["key-a"]}]},
+    {"do": "event", "stream": "s1", "save": "ev"},
+    {"do": "request", "relay": "b", "key": "key-a", "context": "free", "ifNoneMatch": "$tb1", "query": {"flagConfigLastModified": "$ev.lastModified"}, "expect": {"status": 200, "etag": "differs:tb1", "values": {"greeting": "hi"}}}
+   ]
+  },
+  {
+   "name": "a made up configuration identity is answered with what the relay has",
+   "source": "relay",
+   "basis": "the parameters are hints: an identity the relay never loads is never an error, and the answer is the current configuration",
+   "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}],
+   "steps": [
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "save": "t1", "expect": {"status": 200, "values": {"greeting": "hello"}}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$t1", "query": {"flagConfigEtag": "never-published", "flagConfigLastModified": "4102444800"}, "expect": {"status": 304, "etag": "same:t1", "emptyBody": true}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "query": {"flagConfigEtag": "never-published", "flagConfigLastModified": "2100-01-01T00:00:00Z"}, "expect": {"status": 200, "etag": "same:t1", "values": {"greeting": "hello"}}},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "query": {"flagConfigLastModified": "not-a-date"}, "expect": {"status": 200, "etag": "same:t1"}}
+   ]
+  },
+  {
+   "name": "the event stream loop: connect, change, notification, refetch",
+   "source": "provider",
+   "basis": "the OFREP providers read eventStreams from the bulk response, connect to the url, and refetch with flagConfigEtag and flagConfigLastModified when a refetchEvaluation event arrives",
+   "relays": {"a": {"poll": "1s", "stream": true}},
+   "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}],
+   "steps": [
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "save": "t1", "expect": {"status": 200, "eventStreams": "url"}},
+    {"do": "connect", "relay": "a", "key": "key-a", "stream": "s1"},
+    {"do": "publish", "store": [{"name": "set-a", "document": "v2-greeting-changed", "keys": ["key-a"]}]},
+    {"do": "event", "stream": "s1", "save": "ev"},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$t1", "query": {"flagConfigEtag": "$ev.etag", "flagConfigLastModified": "$ev.lastModified"}, "save": "t2", "expect": {"status": 200, "etag": "differs:t1", "values": {"greeting": "hi"}, "eventStreams": "url"}},
+    {"do": "publish", "store": [{"name": "set-a", "document": "v1", "keys": ["key-a"]}]},
+    {"do": "event", "stream": "s1", "save": "ev2"},
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "ifNoneMatch": "$t2", "query": {"flagConfigEtag": "$ev2.etag", "flagConfigLastModified": "$ev2.lastModified"}, "expect": {"status": 200, "etag": "differs:t2", "values": {"greeting": "hello"}}}
+   ]
+  },
+  {
+   "name": "response level and flag metadata",
+   "source": "spec",
+   "basis": "bulkEvaluationSuccess.metadata is optional metadata of the flag set; the flag metadata is a map of booleans, strings and numbers; the relay has no flag set metadata to send",
+   "store": [{"name": "set-a", "document": "v7-metadata", "keys": ["key-a"]}],
+   "steps": [
+    {"do": "request", "relay": "a", "key": "key-a", "context": "free", "expect": {"status": 200, "metadata": "absent", "flagMetadata": {"with_metadata": {"team": "payments", "revision": 3, "experimental": false}}}}
+   ]
+  }
+ ]
+}

@@ -44,6 +44,8 @@ type Deps struct {
 	NewManager events.NewManagerFunc
 	// Broadcast is called with every change of a flag set, see [events.RuntimeConfig.Broadcast].
 	Broadcast func(flagruntime.Change)
+	// Now dates the flag sets that a build creates; nil is clock.Now.
+	Now func() time.Time
 	// Hooks are the hooks of the reconcile engine.
 	Hooks flagruntime.Hooks
 	// Secrets reads the secrets of the file (environment and files).

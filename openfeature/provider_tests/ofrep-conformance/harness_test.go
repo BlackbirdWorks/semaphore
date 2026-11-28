@@ -9,11 +9,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	ofrepconformance "github.com/blackbirdworks/semaphore/openfeature/provider_tests/ofrep-conformance"
@@ -67,33 +69,96 @@ type request struct {
 	contentType string
 }
 
+// response is what the relay answered. It records a requirement of the pinned document only when a case asserts on it:
+// the want methods assert and then claim what they asserted (a response that was merely returned claims nothing).
 type response struct {
 	header http.Header
+	rec    *recorder
 	body   []byte
-	status int
+	// observed are the requirements the exchange exercised, claimed one kind at a time by the assertions.
+	observed []string
+	status   int
+}
+
+// claim records the observed requirements of the kinds.
+func (r *response) claim(kinds ...string) {
+	var ids []string
+
+	for _, id := range r.observed {
+		if slices.Contains(kinds, ofrepconformance.KindOf(id)) {
+			ids = append(ids, id)
+		}
+	}
+
+	r.rec.add(ids)
+}
+
+// wantStatus asserts the status; the response, the request parameters and the security scheme of the exchange are then
+// claimed.
+func (r *response) wantStatus(t *testing.T, want int) {
+	t.Helper()
+
+	if assert.Equal(t, want, r.status, "body: %s", string(r.body)) {
+		r.claim(ofrepconformance.KindResponse, ofrepconformance.KindParam, ofrepconformance.KindSecurity)
+	}
+}
+
+// wantETag asserts the ETag of the response and claims the header.
+func (r *response) wantETag(t *testing.T, want string) {
+	t.Helper()
+
+	if assert.Equal(t, want, r.header.Get("ETag"), "the ETag") {
+		r.claimETag()
+	}
+}
+
+// wantStrongETag asserts that the response has an ETag that is a quoted strong entity tag, and claims the header.
+func (r *response) wantStrongETag(t *testing.T) {
+	t.Helper()
+
+	if assert.Regexp(t, `^"[^"]+"$`, r.header.Get("ETag"), "the ETag") {
+		r.claimETag()
+	}
+}
+
+func (r *response) claimETag() {
+	var ids []string
+
+	suffix := " " + http.CanonicalHeaderKey("ETag")
+
+	for _, id := range r.observed {
+		if ofrepconformance.KindOf(id) == ofrepconformance.KindHeader && strings.HasSuffix(id, suffix) {
+			ids = append(ids, id)
+		}
+	}
+
+	r.rec.add(ids)
+}
+
+// bodyAsserted claims the schema and the value branches of the body: call it after asserting on the content of the
+// body.
+func (r *response) bodyAsserted() {
+	r.claim(ofrepconformance.KindSchema, ofrepconformance.KindBranch)
 }
 
 // post sends a JSON POST request and returns what the relay answered.
-func (h *harness) post(t *testing.T, rawURL string, headers map[string]string, body string) (int, http.Header, []byte) {
+func (h *harness) post(t *testing.T, rawURL string, headers map[string]string, body string) *response {
 	t.Helper()
 
-	res := h.send(t, &request{method: http.MethodPost, url: rawURL, headers: headers, body: body})
-
-	return res.status, res.header, res.body
+	return h.send(t, &request{method: http.MethodPost, url: rawURL, headers: headers, body: body})
 }
 
-// send sends the request, checks the response against the pinned document when the document defines it, and
-// records what it exercised.
-func (h *harness) send(t *testing.T, call *request) response {
-	t.Helper()
-
+// newHTTPRequest builds the HTTP request of a call.
+func newHTTPRequest(ctx context.Context, call *request) (*http.Request, error) {
 	var reader io.Reader = http.NoBody
 	if call.body != "" {
 		reader = strings.NewReader(call.body)
 	}
 
-	req, err := http.NewRequestWithContext(t.Context(), call.method, call.url, reader)
-	require.NoError(t, err)
+	req, err := http.NewRequestWithContext(ctx, call.method, call.url, reader)
+	if err != nil {
+		return nil, fmt.Errorf("building the request: %w", err)
+	}
 
 	switch {
 	case call.contentType != "":
@@ -112,6 +177,16 @@ func (h *harness) send(t *testing.T, call *request) response {
 		}
 	}
 
+	return req, nil
+}
+
+// send sends the request and checks the response against the pinned document when the document defines it.
+func (h *harness) send(t *testing.T, call *request) *response {
+	t.Helper()
+
+	req, err := newHTTPRequest(t.Context(), call)
+	require.NoError(t, err)
+
 	resp, err := (&http.Client{Timeout: httpClientTimeout}).Do(req)
 	require.NoError(t, err)
 
@@ -120,9 +195,9 @@ func (h *harness) send(t *testing.T, call *request) response {
 	respBody, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 
-	h.observe(t, req, resp.StatusCode, resp.Header, respBody)
+	observed := h.observe(t, req, resp.StatusCode, resp.Header, respBody)
 
-	return response{status: resp.StatusCode, header: resp.Header, body: respBody}
+	return &response{status: resp.StatusCode, header: resp.Header, body: respBody, observed: observed, rec: h.rec}
 }
 
 // postRaw reads the raw HTTP/1.1 wire bytes after the header block before net/http strips 304 bodies.
@@ -131,7 +206,7 @@ func (h *harness) postRaw(
 	rawURL string,
 	headers map[string]string,
 	body string,
-) (int, http.Header, []byte) {
+) *response {
 	t.Helper()
 
 	parsed, err := url.Parse(rawURL)
@@ -183,14 +258,16 @@ func (h *harness) postRaw(
 	defer func() { _ = resp.Body.Close() }()
 
 	wireBody := raw[headerEnd+crlfPairLen:]
-	h.observe(t, req, resp.StatusCode, resp.Header, wireBody)
+	observed := h.observe(t, req, resp.StatusCode, resp.Header, wireBody)
 
-	return resp.StatusCode, resp.Header, wireBody
+	return &response{
+		status: resp.StatusCode, header: resp.Header, body: wireBody, observed: observed, rec: h.rec,
+	}
 }
 
-// observe validates the response against the pinned document, when the document defines it, and records the
-// requirements it covers.
-func (h *harness) observe(t *testing.T, req *http.Request, status int, hdr http.Header, body []byte) {
+// observe validates the response against the pinned document, when the document defines it, and returns the
+// requirements it exercised: they are recorded when a case asserts on them.
+func (h *harness) observe(t *testing.T, req *http.Request, status int, hdr http.Header, body []byte) []string {
 	t.Helper()
 
 	path := req.URL.Path
@@ -203,12 +280,12 @@ func (h *harness) observe(t *testing.T, req *http.Request, status int, hdr http.
 	case strings.HasPrefix(path, singleFlagPrefix):
 		template = singleFlagPath
 	default:
-		return
+		return nil
 	}
 
 	// the document defines the POST operations only: another method is no operation of the protocol
 	if req.Method != http.MethodPost {
-		return
+		return nil
 	}
 
 	require.True(t, h.spec.HasResponse(template, req.Method, status),
@@ -218,12 +295,12 @@ func (h *harness) observe(t *testing.T, req *http.Request, status int, hdr http.
 	require.NoError(t, h.spec.ValidateResponse(template, req.Method, status, hdr, body),
 		"%s %s -> %d: %s", req.Method, req.URL.Path, status, string(body))
 
-	h.rec.add(h.spec.Observed(template, req.Method, &ofrepconformance.Exchange{
+	return h.spec.Observed(template, req.Method, &ofrepconformance.Exchange{
 		ReqHeaders:    req.Header,
 		RespHeaders:   hdr,
 		Query:         req.URL.Query(),
 		Body:          body,
 		Status:        status,
 		Authenticated: strings.HasPrefix(req.URL.String(), h.auth) || strings.HasPrefix(req.URL.String(), h.base),
-	}))
+	})
 }

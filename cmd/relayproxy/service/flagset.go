@@ -91,6 +91,15 @@ type SegmentUser interface {
 	FlagSegments(flagKey string) (names []string, requiresServerEvaluation bool)
 }
 
+// ConfigVersioned is a [FlagSet] that knows which configuration it serves: the OFREP bulk evaluation compares it with
+// the configuration a client was notified of.
+type ConfigVersioned interface {
+	// ConfigETag is the identity of the configuration of the flag set, the one the change notification carries.
+	ConfigETag() string
+	// ConfigModified is the date the configuration of the flag set was built.
+	ConfigModified() time.Time
+}
+
 // EventAcceptor is a [FlagSet] that tells whether it accepted a feature event: its queue to the exporters is bounded
 // and a full queue drops the event. The collector then counts only the accepted events as ingested. A flag set that
 // does not implement it accepts every event.

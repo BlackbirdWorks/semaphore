@@ -99,3 +99,7 @@ metadata_flag:
   variations: {on: true}
   defaultRule: {variation: on}
   metadata: {team: "payments", revision: 3, experimental: false}
+nested_metadata_flag:
+  variations: {on: true}
+  defaultRule: {variation: on}
+  metadata: {team: "payments", labels: {a: 1}, owners: ["x", "y"], none: null}

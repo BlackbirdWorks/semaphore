@@ -101,12 +101,12 @@ func newFakeSSE(t *testing.T, gated bool) *fakeSSE {
 	return fake
 }
 
-func (f *fakeSSE) BroadcastFlagChanges(name string, diff notifier.DiffCache) error {
+func (f *fakeSSE) BroadcastConfigChange(name string, _ stream.ConfigIdentity) error {
 	f.entered <- name
 
 	<-f.gate
 
-	f.got <- delivery{name: name, diff: diff}
+	f.got <- delivery{name: name}
 
 	return nil
 }
